@@ -38,13 +38,13 @@ func NewNotificationService(
 func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, input domain.SendNotificationInput) (*domain.Notification, error) {
 	channelCfg, err := s.channelRepo.GetByID(ctx, input.ChannelConfigID)
 	if err != nil {
-		return nil, fmt.Errorf("channel config not found: %w", err)
+		return nil, fmt.Errorf("%w: channel config not found: %w", domain.ErrNotFound, err)
 	}
 	if channelCfg.TenantID != tenantID {
-		return nil, fmt.Errorf("channel config does not belong to this tenant")
+		return nil, fmt.Errorf("%w: channel config does not belong to this tenant", domain.ErrValidationFailed)
 	}
 	if !channelCfg.IsActive {
-		return nil, fmt.Errorf("channel config is disabled")
+		return nil, fmt.Errorf("%w: channel config is disabled", domain.ErrValidationFailed)
 	}
 
 	now := time.Now()

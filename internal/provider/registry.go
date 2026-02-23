@@ -3,6 +3,8 @@ package provider
 import (
 	"fmt"
 	"sync"
+
+	"github.com/bse/notifyd/internal/domain"
 )
 
 type Registry struct {
@@ -25,7 +27,7 @@ func (r *Registry) Get(channelType string) (Provider, error) {
 	defer r.mu.RUnlock()
 	p, ok := r.providers[channelType]
 	if !ok {
-		return nil, fmt.Errorf("no provider registered for channel type: %s", channelType)
+		return nil, fmt.Errorf("%w: no provider registered for channel type: %s", domain.ErrUnsupportedChannel, channelType)
 	}
 	return p, nil
 }

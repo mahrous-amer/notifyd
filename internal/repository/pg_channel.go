@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/bse/notifyd/internal/domain"
@@ -25,7 +27,14 @@ func (r *PgChannelConfigRepo) Create(ctx context.Context, cfg *domain.ChannelCon
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	_, err := r.pool.Exec(ctx, query,
 		cfg.ID, cfg.TenantID, cfg.Channel, cfg.Name, cfg.Config, cfg.IsActive, cfg.CreatedAt, cfg.UpdatedAt)
-	return err
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %s", domain.ErrValidationFailed, pgErr.ConstraintName)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *PgChannelConfigRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.ChannelConfig, error) {
@@ -62,7 +71,7 @@ func (r *PgChannelConfigRepo) Update(ctx context.Context, id uuid.UUID, tenantID
 	err := r.pool.QueryRow(ctx, query, id, tenantID, input.Name, input.Config, input.IsActive).Scan(
 		&cfg.ID, &cfg.TenantID, &cfg.Channel, &cfg.Name, &cfg.Config, &cfg.IsActive, &cfg.CreatedAt, &cfg.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("channel config not found")
+		return nil, fmt.Errorf("%w: channel config not found", domain.ErrNotFound)
 	}
 	return cfg, err
 }
@@ -74,7 +83,7 @@ func (r *PgChannelConfigRepo) Delete(ctx context.Context, id uuid.UUID, tenantID
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("channel config not found")
+		return fmt.Errorf("%w: channel config not found", domain.ErrNotFound)
 	}
 	return nil
 }
@@ -83,7 +92,7 @@ func (r *PgChannelConfigRepo) scanConfig(row pgx.Row) (*domain.ChannelConfig, er
 	cfg := &domain.ChannelConfig{}
 	err := row.Scan(&cfg.ID, &cfg.TenantID, &cfg.Channel, &cfg.Name, &cfg.Config, &cfg.IsActive, &cfg.CreatedAt, &cfg.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("channel config not found")
+		return nil, fmt.Errorf("%w: channel config not found", domain.ErrNotFound)
 	}
 	return cfg, err
 }

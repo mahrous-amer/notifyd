@@ -40,7 +40,7 @@ func (r *PgNotificationRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain
 		&n.ID, &n.TenantID, &n.ChannelConfigID, &n.Channel, &n.Subject, &n.Body, &n.Metadata, &n.Status,
 		&n.AsynqTaskID, &n.RetryCount, &n.MaxRetries, &n.LastError, &n.DeliveredAt, &n.CreatedAt, &n.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("notification not found")
+		return nil, fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
 	return n, err
 }
@@ -52,7 +52,7 @@ func (r *PgNotificationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, sta
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("notification not found")
+		return fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ func (r *PgNotificationRepo) SetAsynqTaskID(ctx context.Context, id uuid.UUID, t
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("notification not found")
+		return fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
 	return nil
 }
@@ -77,7 +77,7 @@ func (r *PgNotificationRepo) MarkDelivered(ctx context.Context, id uuid.UUID) er
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("notification not found")
+		return fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
 	return nil
 }
@@ -89,7 +89,7 @@ func (r *PgNotificationRepo) IncrementRetry(ctx context.Context, id uuid.UUID, l
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("notification not found")
+		return fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -46,7 +47,15 @@ func (h *NotificationHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	notif, err := h.svc.Send(r.Context(), claims.TenantID, input)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "channel config not found")
+			return
+		}
+		if errors.Is(err, domain.ErrValidationFailed) {
+			response.Error(w, http.StatusBadRequest, "validation failed")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -79,7 +88,7 @@ func (h *NotificationHandler) SendMulti(w http.ResponseWriter, r *http.Request) 
 	}
 	res := multiResult{Sent: results}
 	for _, e := range errs {
-		res.Errors = append(res.Errors, e.Error())
+		res.Errors = append(res.Errors, sanitizeNotificationError(e))
 	}
 
 	response.JSON(w, http.StatusAccepted, res)
@@ -100,7 +109,11 @@ func (h *NotificationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	notif, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "notification not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -172,7 +185,11 @@ func (h *NotificationHandler) ListAttempts(w http.ResponseWriter, r *http.Reques
 
 	notif, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "notification not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if notif.TenantID != claims.TenantID {
@@ -187,4 +204,20 @@ func (h *NotificationHandler) ListAttempts(w http.ResponseWriter, r *http.Reques
 	}
 
 	response.JSON(w, http.StatusOK, attempts)
+}
+
+// sanitizeNotificationError returns a client-safe error message for errors
+// that surface through the SendMulti batch result, where we cannot return
+// HTTP status codes per-item but still want to avoid leaking internal details.
+func sanitizeNotificationError(err error) string {
+	if errors.Is(err, domain.ErrNotFound) {
+		return "channel config not found"
+	}
+	if errors.Is(err, domain.ErrValidationFailed) {
+		return "validation failed"
+	}
+	if errors.Is(err, domain.ErrUnsupportedChannel) {
+		return "unsupported channel"
+	}
+	return "internal server error"
 }

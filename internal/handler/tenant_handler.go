@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -29,7 +30,11 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Create(r.Context(), input)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, domain.ErrValidationFailed) {
+			response.Error(w, http.StatusBadRequest, "validation failed")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -45,7 +50,11 @@ func (h *TenantHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	tenant, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -67,7 +76,15 @@ func (h *TenantHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	tenant, err := h.svc.Update(r.Context(), id, input)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		if errors.Is(err, domain.ErrValidationFailed) {
+			response.Error(w, http.StatusBadRequest, "validation failed")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -82,7 +99,11 @@ func (h *TenantHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Delete(r.Context(), id); err != nil {
-		response.Error(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

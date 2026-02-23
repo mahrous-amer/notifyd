@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/bse/notifyd/internal/domain"
@@ -25,7 +27,14 @@ func (r *PgTenantRepo) Create(ctx context.Context, t *domain.Tenant) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	_, err := r.pool.Exec(ctx, query,
 		t.ID, t.Name, t.Slug, t.APIKey, t.APISecret, t.IsActive, t.CreatedAt, t.UpdatedAt)
-	return err
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %s", domain.ErrValidationFailed, pgErr.ConstraintName)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *PgTenantRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Tenant, error) {
@@ -61,7 +70,7 @@ func (r *PgTenantRepo) Update(ctx context.Context, id uuid.UUID, input domain.Up
 	err := r.pool.QueryRow(ctx, query, id, input.Name, input.IsActive).Scan(
 		&t.ID, &t.Name, &t.Slug, &t.APIKey, &t.APISecret, &t.IsActive, &t.CreatedAt, &t.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("tenant not found")
+		return nil, fmt.Errorf("%w: tenant not found", domain.ErrNotFound)
 	}
 	return t, err
 }
@@ -73,7 +82,7 @@ func (r *PgTenantRepo) Delete(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("tenant not found")
+		return fmt.Errorf("%w: tenant not found", domain.ErrNotFound)
 	}
 	return nil
 }
@@ -112,7 +121,7 @@ func (r *PgTenantRepo) scanTenant(row pgx.Row) (*domain.Tenant, error) {
 	t := &domain.Tenant{}
 	err := row.Scan(&t.ID, &t.Name, &t.Slug, &t.APIKey, &t.APISecret, &t.IsActive, &t.CreatedAt, &t.UpdatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("tenant not found")
+		return nil, fmt.Errorf("%w: tenant not found", domain.ErrNotFound)
 	}
 	return t, err
 }

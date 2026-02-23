@@ -22,18 +22,18 @@ func NewChannelService(repo domain.ChannelConfigRepository, registry *provider.R
 
 func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input domain.CreateChannelConfigInput) (*domain.ChannelConfig, error) {
 	if !domain.IsValidChannelType(input.Channel) {
-		return nil, fmt.Errorf("invalid channel type: %s", input.Channel)
+		return nil, fmt.Errorf("%w: invalid channel type: %s", domain.ErrValidationFailed, input.Channel)
 	}
 	if input.Name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, fmt.Errorf("%w: name is required", domain.ErrValidationFailed)
 	}
 
 	prov, err := s.registry.Get(string(input.Channel))
 	if err != nil {
-		return nil, fmt.Errorf("unsupported channel: %w", err)
+		return nil, fmt.Errorf("%w: %w", domain.ErrUnsupportedChannel, err)
 	}
 	if err := prov.ValidateConfig(input.Config); err != nil {
-		return nil, fmt.Errorf("invalid channel config: %w", err)
+		return nil, fmt.Errorf("%w: invalid channel config: %w", domain.ErrValidationFailed, err)
 	}
 
 	now := time.Now()
@@ -49,7 +49,7 @@ func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input d
 	}
 
 	if err := s.repo.Create(ctx, cfg); err != nil {
-		return nil, fmt.Errorf("create channel config: %w", err)
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -70,10 +70,10 @@ func (s *ChannelService) Update(ctx context.Context, id uuid.UUID, tenantID uuid
 		}
 		prov, err := s.registry.Get(string(existing.Channel))
 		if err != nil {
-			return nil, fmt.Errorf("unsupported channel: %w", err)
+			return nil, fmt.Errorf("%w: %w", domain.ErrUnsupportedChannel, err)
 		}
 		if err := prov.ValidateConfig(*input.Config); err != nil {
-			return nil, fmt.Errorf("invalid channel config: %w", err)
+			return nil, fmt.Errorf("%w: invalid channel config: %w", domain.ErrValidationFailed, err)
 		}
 	}
 	return s.repo.Update(ctx, id, tenantID, input)

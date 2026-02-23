@@ -29,10 +29,10 @@ type CreateTenantResult struct {
 
 func (s *TenantService) Create(ctx context.Context, input domain.CreateTenantInput) (*CreateTenantResult, error) {
 	if input.Name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, fmt.Errorf("%w: name is required", domain.ErrValidationFailed)
 	}
 	if input.Slug == "" {
-		return nil, fmt.Errorf("slug is required")
+		return nil, fmt.Errorf("%w: slug is required", domain.ErrValidationFailed)
 	}
 
 	apiKey, err := generateRandomHex(32)
@@ -61,7 +61,7 @@ func (s *TenantService) Create(ctx context.Context, input domain.CreateTenantInp
 	}
 
 	if err := s.repo.Create(ctx, tenant); err != nil {
-		return nil, fmt.Errorf("create tenant: %w", err)
+		return nil, err
 	}
 
 	return &CreateTenantResult{

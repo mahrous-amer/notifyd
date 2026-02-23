@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -36,7 +37,15 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := h.svc.Create(r.Context(), claims.TenantID, input)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, domain.ErrValidationFailed) {
+			response.Error(w, http.StatusBadRequest, "validation failed")
+			return
+		}
+		if errors.Is(err, domain.ErrUnsupportedChannel) {
+			response.Error(w, http.StatusBadRequest, "unsupported channel")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -58,7 +67,11 @@ func (h *ChannelHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "channel config not found")
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "channel config not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if cfg.TenantID != claims.TenantID {
@@ -106,7 +119,19 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.svc.Update(r.Context(), id, claims.TenantID, input)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "channel config not found")
+		if errors.Is(err, domain.ErrValidationFailed) {
+			response.Error(w, http.StatusBadRequest, "invalid channel configuration")
+			return
+		}
+		if errors.Is(err, domain.ErrUnsupportedChannel) {
+			response.Error(w, http.StatusBadRequest, "unsupported channel")
+			return
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "channel config not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -127,7 +152,11 @@ func (h *ChannelHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Delete(r.Context(), id, claims.TenantID); err != nil {
-		response.Error(w, http.StatusNotFound, "channel config not found")
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "channel config not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
