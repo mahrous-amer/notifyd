@@ -22,7 +22,7 @@ func NewJWTManager(signingKey string, issuer string, expiration time.Duration) *
 	}
 }
 
-func (m *JWTManager) GenerateToken(tenantID uuid.UUID, tenantSlug string) (string, error) {
+func (m *JWTManager) GenerateToken(tenantID uuid.UUID, tenantSlug string, isAdmin bool) (string, error) {
 	now := time.Now()
 	claims := TenantClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -35,6 +35,7 @@ func (m *JWTManager) GenerateToken(tenantID uuid.UUID, tenantSlug string) (strin
 		},
 		TenantID:   tenantID,
 		TenantSlug: tenantSlug,
+		IsAdmin:    isAdmin,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(m.signingKey)

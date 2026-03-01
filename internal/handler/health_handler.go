@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,8 +12,8 @@ import (
 )
 
 type HealthHandler struct {
-	dbPool    *pgxpool.Pool
-	redisCli  *redis.Client
+	dbPool   *pgxpool.Pool
+	redisCli *redis.Client
 }
 
 func NewHealthHandler(dbPool *pgxpool.Pool, redisCli *redis.Client) *HealthHandler {
@@ -51,20 +50,4 @@ func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"checks": checks,
 	})
-}
-
-func parsePagination(r *http.Request) (int, int) {
-	limit := 20
-	offset := 0
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
-			limit = v
-		}
-	}
-	if o := r.URL.Query().Get("offset"); o != "" {
-		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
-			offset = v
-		}
-	}
-	return limit, offset
 }

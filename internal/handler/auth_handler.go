@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/google/uuid"
 
 	"github.com/bse/notifyd/internal/auth"
 	"github.com/bse/notifyd/internal/domain"
@@ -12,12 +15,24 @@ import (
 )
 
 type AuthHandler struct {
-	tenantRepo domain.TenantRepository
-	jwtMgr     *auth.JWTManager
+	tenantRepo     domain.TenantRepository
+	jwtMgr         *auth.JWTManager
+	adminAPIKey    string
+	adminAPISecret string
 }
 
-func NewAuthHandler(tenantRepo domain.TenantRepository, jwtMgr *auth.JWTManager) *AuthHandler {
-	return &AuthHandler{tenantRepo: tenantRepo, jwtMgr: jwtMgr}
+func NewAuthHandler(
+	tenantRepo domain.TenantRepository,
+	jwtMgr *auth.JWTManager,
+	adminAPIKey string,
+	adminAPISecret string,
+) *AuthHandler {
+	return &AuthHandler{
+		tenantRepo:     tenantRepo,
+		jwtMgr:         jwtMgr,
+		adminAPIKey:    adminAPIKey,
+		adminAPISecret: adminAPISecret,
+	}
 }
 
 type tokenRequest struct {
@@ -42,6 +57,34 @@ func (h *AuthHandler) IssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.adminAPIKey != "" && subtle.ConstantTimeCompare([]byte(req.APIKey), []byte(h.adminAPIKey)) == 1 {
+		h.issueAdminToken(w, req.APISecret)
+		return
+	}
+
+	h.issueTenantToken(w, r, req)
+}
+
+func (h *AuthHandler) issueAdminToken(w http.ResponseWriter, providedSecret string) {
+	if subtle.ConstantTimeCompare([]byte(providedSecret), []byte(h.adminAPISecret)) != 1 {
+		response.Error(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// Admin tokens use uuid.Nil as the tenant ID since admins have cross-tenant access.
+	token, err := h.jwtMgr.GenerateToken(uuid.Nil, "", true)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, tokenResponse{
+		Token:     token,
+		ExpiresIn: h.jwtMgr.Expiration().String(),
+	})
+}
+
+func (h *AuthHandler) issueTenantToken(w http.ResponseWriter, r *http.Request, req tokenRequest) {
 	tenant, err := h.tenantRepo.GetByAPIKey(r.Context(), req.APIKey)
 	if err != nil {
 		response.Error(w, http.StatusUnauthorized, "invalid credentials")
@@ -58,7 +101,7 @@ func (h *AuthHandler) IssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.jwtMgr.GenerateToken(tenant.ID, tenant.Slug)
+	token, err := h.jwtMgr.GenerateToken(tenant.ID, tenant.Slug, false)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to generate token")
 		return

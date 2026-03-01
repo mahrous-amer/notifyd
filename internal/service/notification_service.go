@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/bse/notifyd/internal/domain"
@@ -19,6 +20,7 @@ type NotificationService struct {
 	channelRepo domain.ChannelConfigRepository
 	asynqClient *asynq.Client
 	maxRetries  int
+	logger      zerolog.Logger
 }
 
 func NewNotificationService(
@@ -26,19 +28,21 @@ func NewNotificationService(
 	channelRepo domain.ChannelConfigRepository,
 	asynqClient *asynq.Client,
 	maxRetries int,
+	logger zerolog.Logger,
 ) *NotificationService {
 	return &NotificationService{
 		notifRepo:   notifRepo,
 		channelRepo: channelRepo,
 		asynqClient: asynqClient,
 		maxRetries:  maxRetries,
+		logger:      logger,
 	}
 }
 
 func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, input domain.SendNotificationInput) (*domain.Notification, error) {
 	channelCfg, err := s.channelRepo.GetByID(ctx, input.ChannelConfigID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: channel config not found: %w", domain.ErrNotFound, err)
+		return nil, fmt.Errorf("get channel config: %w", err)
 	}
 	if channelCfg.TenantID != tenantID {
 		return nil, fmt.Errorf("%w: channel config does not belong to this tenant", domain.ErrValidationFailed)
@@ -46,6 +50,8 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 	if !channelCfg.IsActive {
 		return nil, fmt.Errorf("%w: channel config is disabled", domain.ErrValidationFailed)
 	}
+
+	maxRetries := s.effectiveMaxRetries(channelCfg)
 
 	now := time.Now()
 	notif := &domain.Notification{
@@ -57,7 +63,7 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 		Body:            input.Body,
 		Metadata:        input.Metadata,
 		Status:          domain.StatusPending,
-		MaxRetries:      s.maxRetries,
+		MaxRetries:      maxRetries,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -78,7 +84,8 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 		Subject:         subject,
 		Body:            notif.Body,
 		Metadata:        notif.Metadata,
-	}, asynq.MaxRetry(s.maxRetries))
+		DeliveryPrefs:   channelCfg.DeliveryPrefs,
+	}, asynq.MaxRetry(maxRetries))
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -89,8 +96,12 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 	}
 
 	if err := s.notifRepo.SetAsynqTaskID(ctx, notif.ID, info.ID); err != nil {
-		// Non-fatal: notification is enqueued, but asynq_task_id won't be set for observability.
-		// The notification will still be delivered; we just lose task correlation.
+		// Non-fatal: the notification is enqueued and will be delivered.
+		// We only lose the asynq task ID correlation for observability.
+		s.logger.Warn().
+			Err(err).
+			Str("notification_id", notif.ID.String()).
+			Msg("failed to store asynq task ID; notification is still enqueued")
 	}
 
 	return notif, nil
@@ -132,4 +143,21 @@ func (s *NotificationService) List(ctx context.Context, filter domain.Notificati
 		filter.Limit = 20
 	}
 	return s.notifRepo.List(ctx, filter)
+}
+
+// CountByStatus returns the total count of notifications for each status
+// across all tenants. It delegates to a single aggregation query in the
+// repository rather than issuing per-tenant queries.
+func (s *NotificationService) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {
+	return s.notifRepo.CountByStatus(ctx)
+}
+
+// effectiveMaxRetries returns the max retry count to use for a notification,
+// giving precedence to the channel config's delivery preferences over the
+// service-level default.
+func (s *NotificationService) effectiveMaxRetries(cfg *domain.ChannelConfig) int {
+	if cfg.DeliveryPrefs != nil && cfg.DeliveryPrefs.MaxRetries != nil {
+		return *cfg.DeliveryPrefs.MaxRetries
+	}
+	return s.maxRetries
 }

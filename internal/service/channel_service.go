@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/bse/notifyd/internal/domain"
 	"github.com/bse/notifyd/internal/provider"
@@ -14,10 +15,11 @@ import (
 type ChannelService struct {
 	repo     domain.ChannelConfigRepository
 	registry *provider.Registry
+	logger   zerolog.Logger
 }
 
-func NewChannelService(repo domain.ChannelConfigRepository, registry *provider.Registry) *ChannelService {
-	return &ChannelService{repo: repo, registry: registry}
+func NewChannelService(repo domain.ChannelConfigRepository, registry *provider.Registry, logger zerolog.Logger) *ChannelService {
+	return &ChannelService{repo: repo, registry: registry, logger: logger}
 }
 
 func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input domain.CreateChannelConfigInput) (*domain.ChannelConfig, error) {
@@ -35,17 +37,21 @@ func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input d
 	if err := prov.ValidateConfig(input.Config); err != nil {
 		return nil, fmt.Errorf("%w: invalid channel config: %w", domain.ErrValidationFailed, err)
 	}
+	if err := input.DeliveryPrefs.Validate(); err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	cfg := &domain.ChannelConfig{
-		ID:        uuid.New(),
-		TenantID:  tenantID,
-		Channel:   input.Channel,
-		Name:      input.Name,
-		Config:    input.Config,
-		IsActive:  true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            uuid.New(),
+		TenantID:      tenantID,
+		Channel:       input.Channel,
+		Name:          input.Name,
+		Config:        input.Config,
+		IsActive:      true,
+		DeliveryPrefs: input.DeliveryPrefs,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := s.repo.Create(ctx, cfg); err != nil {
@@ -75,6 +81,9 @@ func (s *ChannelService) Update(ctx context.Context, id uuid.UUID, tenantID uuid
 		if err := prov.ValidateConfig(*input.Config); err != nil {
 			return nil, fmt.Errorf("%w: invalid channel config: %w", domain.ErrValidationFailed, err)
 		}
+	}
+	if err := input.DeliveryPrefs.Validate(); err != nil {
+		return nil, err
 	}
 	return s.repo.Update(ctx, id, tenantID, input)
 }

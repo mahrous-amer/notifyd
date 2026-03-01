@@ -1,10 +1,16 @@
 # Binaries
+bin/
 api
 worker
+admin-bot
 *.exe
 
 # Environment
 .env
+
+# Coverage
+coverage.out
+coverage.html
 
 # IDE
 .idea/

@@ -69,12 +69,14 @@ func New(
 			r.Route("/{notificationID}", func(r chi.Router) {
 				r.Get("/", notifH.GetByID)
 				r.Get("/attempts", notifH.ListAttempts)
+				r.Get("/metrics", notifH.GetMetrics)
 			})
 		})
 	})
 
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(auth.Middleware(jwtMgr))
+		r.Use(auth.AdminMiddleware())
 		r.Route("/tenants", func(r chi.Router) {
 			r.Get("/", tenantH.List)
 			r.Post("/", tenantH.Create)

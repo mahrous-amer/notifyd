@@ -33,12 +33,12 @@ func (r *PgNotificationRepo) Create(ctx context.Context, n *domain.Notification)
 func (r *PgNotificationRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Notification, error) {
 	query := `
 		SELECT id, tenant_id, channel_config_id, channel, subject, body, metadata, status,
-		       asynq_task_id, retry_count, max_retries, last_error, delivered_at, created_at, updated_at
+		       asynq_task_id, retry_count, max_retries, last_error, delivered_at, provider_msg_id, created_at, updated_at
 		FROM notifications WHERE id = $1`
 	n := &domain.Notification{}
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&n.ID, &n.TenantID, &n.ChannelConfigID, &n.Channel, &n.Subject, &n.Body, &n.Metadata, &n.Status,
-		&n.AsynqTaskID, &n.RetryCount, &n.MaxRetries, &n.LastError, &n.DeliveredAt, &n.CreatedAt, &n.UpdatedAt)
+		&n.AsynqTaskID, &n.RetryCount, &n.MaxRetries, &n.LastError, &n.DeliveredAt, &n.ProviderMsgID, &n.CreatedAt, &n.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("%w: notification not found", domain.ErrNotFound)
 	}
@@ -60,6 +60,18 @@ func (r *PgNotificationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, sta
 func (r *PgNotificationRepo) SetAsynqTaskID(ctx context.Context, id uuid.UUID, taskID string) error {
 	query := `UPDATE notifications SET asynq_task_id = $2, updated_at = $3 WHERE id = $1`
 	ct, err := r.pool.Exec(ctx, query, id, taskID, time.Now())
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w: notification not found", domain.ErrNotFound)
+	}
+	return nil
+}
+
+func (r *PgNotificationRepo) SetProviderMsgID(ctx context.Context, id uuid.UUID, providerMsgID string) error {
+	query := `UPDATE notifications SET provider_msg_id = $2, updated_at = $3 WHERE id = $1`
+	ct, err := r.pool.Exec(ctx, query, id, providerMsgID, time.Now())
 	if err != nil {
 		return err
 	}
@@ -130,7 +142,7 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 
 	dataQuery := fmt.Sprintf(`
 		SELECT id, tenant_id, channel_config_id, channel, subject, body, metadata, status,
-		       asynq_task_id, retry_count, max_retries, last_error, delivered_at, created_at, updated_at
+		       asynq_task_id, retry_count, max_retries, last_error, delivered_at, provider_msg_id, created_at, updated_at
 		FROM notifications WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
@@ -145,7 +157,7 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 		n := &domain.Notification{}
 		err := rows.Scan(
 			&n.ID, &n.TenantID, &n.ChannelConfigID, &n.Channel, &n.Subject, &n.Body, &n.Metadata, &n.Status,
-			&n.AsynqTaskID, &n.RetryCount, &n.MaxRetries, &n.LastError, &n.DeliveredAt, &n.CreatedAt, &n.UpdatedAt)
+			&n.AsynqTaskID, &n.RetryCount, &n.MaxRetries, &n.LastError, &n.DeliveredAt, &n.ProviderMsgID, &n.CreatedAt, &n.UpdatedAt)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -155,4 +167,26 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 		return nil, 0, err
 	}
 	return notifications, total, nil
+}
+
+// CountByStatus returns a map of notification status to count across all tenants.
+// It issues a single aggregation query rather than N per-tenant queries.
+func (r *PgNotificationRepo) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {
+	query := `SELECT status, COUNT(*) FROM notifications GROUP BY status`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[domain.NotificationStatus]int)
+	for rows.Next() {
+		var status domain.NotificationStatus
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
 }

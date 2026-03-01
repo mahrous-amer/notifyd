@@ -36,6 +36,9 @@ type Config struct {
 
 	TelegramBotToken  string `env:"TELEGRAM_BOT_TOKEN" envDefault:""`
 	TelegramAdminChat int64  `env:"TELEGRAM_ADMIN_CHAT" envDefault:"0"`
+
+	AdminAPIKey    string `env:"ADMIN_API_KEY" envDefault:""`
+	AdminAPISecret string `env:"ADMIN_API_SECRET" envDefault:""`
 }
 
 func Load() (*Config, error) {

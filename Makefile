@@ -15,7 +15,9 @@ MIGRATE         = migrate
         infra-up infra-down infra-logs \
         dev dev-api dev-worker \
         docker-up docker-down docker-logs docker-build \
-        e2e seed clean
+        prod-up prod-down prod-logs \
+        e2e seed clean \
+        load-test load-test-auth load-test-send load-test-query coverage
 
 # ─── Default ─────────────────────────────────────────────────────────────────
 help: ## Show this help
@@ -109,6 +111,35 @@ docker-down: ## Tear down all Docker containers
 docker-logs: ## Tail all Docker logs
 	$(DOCKER_COMPOSE) logs -f
 
+# ─── Production deployment ─────────────────────────────────────────────────────
+prod-up: ## Deploy production stack
+	$(DOCKER_COMPOSE) -f docker-compose.prod.yml up -d --build
+
+prod-down: ## Tear down production stack
+	$(DOCKER_COMPOSE) -f docker-compose.prod.yml down
+
+prod-logs: ## Tail production logs
+	$(DOCKER_COMPOSE) -f docker-compose.prod.yml logs -f
+
+# ─── Load Testing ────────────────────────────────────────────────────────────
+load-test: ## Run k6 load test (full scenario)
+	k6 run loadtest/full_scenario.js
+
+load-test-auth: ## Load test auth endpoint
+	k6 run loadtest/auth.js
+
+load-test-send: ## Load test notification sending
+	k6 run loadtest/notifications.js
+
+load-test-query: ## Load test query endpoints
+	k6 run loadtest/queries.js
+
+# ─── Coverage ────────────────────────────────────────────────────────────────
+coverage: ## Run tests with coverage report
+	go test ./... -race -coverprofile=coverage.out -covermode=atomic
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
 # ─── End-to-end tests ────────────────────────────────────────────────────────
 seed: ## Insert a bootstrap tenant for testing
 	@echo "Creating bootstrap tenant..."
@@ -127,4 +158,5 @@ e2e: ## Run end-to-end test suite (requires running API)
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
 clean: ## Remove build artifacts and stop containers
 	rm -rf bin/
+	rm -f coverage.out coverage.html
 	$(DOCKER_COMPOSE) down -v

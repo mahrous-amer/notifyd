@@ -173,53 +173,11 @@ func (b *Bot) handleStats(ctx context.Context, chatID int64) {
 		return
 	}
 
-	notifCounts, err := b.fetchNotificationCountsByStatus(ctx)
+	notifCounts, err := b.notifSvc.CountByStatus(ctx)
 	if err != nil {
 		b.sendError(chatID, "Failed to fetch notification stats", err)
 		return
 	}
 
 	b.sendHTML(chatID, formatStats(tenantTotal, notifCounts))
-}
-
-// fetchNotificationCountsByStatus aggregates notification counts by status
-// across all tenants. The notification repository always scopes queries by
-// tenant_id, so we must iterate all tenants and sum their counts.
-// This is intentionally simple — /stats is an admin utility, not a hot path.
-func (b *Bot) fetchNotificationCountsByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {
-	statuses := []domain.NotificationStatus{
-		domain.StatusPending,
-		domain.StatusProcessing,
-		domain.StatusRetrying,
-		domain.StatusDelivered,
-		domain.StatusFailed,
-	}
-
-	tenants, _, err := b.tenantSvc.List(ctx, 500, 0)
-	if err != nil {
-		return nil, fmt.Errorf("fetch tenants for stats: %w", err)
-	}
-
-	totals := make(map[domain.NotificationStatus]int, len(statuses))
-
-	for _, tenant := range tenants {
-		for _, status := range statuses {
-			s := status
-			filter := domain.NotificationFilter{
-				TenantID: tenant.ID,
-				Status:   &s,
-				Limit:    1,
-				Offset:   0,
-			}
-
-			_, count, err := b.notifSvc.List(ctx, filter)
-			if err != nil {
-				return nil, fmt.Errorf("count %s notifications for tenant %s: %w", status, tenant.ID, err)
-			}
-
-			totals[status] += count
-		}
-	}
-
-	return totals, nil
 }

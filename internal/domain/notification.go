@@ -40,6 +40,7 @@ type Notification struct {
 	MaxRetries      int                `json:"max_retries"`
 	LastError       *string            `json:"last_error,omitempty"`
 	DeliveredAt     *time.Time         `json:"delivered_at,omitempty"`
+	ProviderMsgID   *string            `json:"provider_msg_id,omitempty"`
 	CreatedAt       time.Time          `json:"created_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
 }
@@ -68,7 +69,9 @@ type NotificationRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*Notification, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status NotificationStatus, lastError *string) error
 	SetAsynqTaskID(ctx context.Context, id uuid.UUID, taskID string) error
+	SetProviderMsgID(ctx context.Context, id uuid.UUID, providerMsgID string) error
 	MarkDelivered(ctx context.Context, id uuid.UUID) error
 	IncrementRetry(ctx context.Context, id uuid.UUID, lastError string) error
 	List(ctx context.Context, filter NotificationFilter) ([]*Notification, int, error)
+	CountByStatus(ctx context.Context) (map[NotificationStatus]int, error)
 }

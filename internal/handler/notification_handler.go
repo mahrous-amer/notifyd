@@ -17,10 +17,15 @@ import (
 type NotificationHandler struct {
 	svc         *service.NotificationService
 	attemptRepo domain.DeliveryAttemptRepository
+	metricRepo  domain.DeliveryMetricRepository
 }
 
-func NewNotificationHandler(svc *service.NotificationService, attemptRepo domain.DeliveryAttemptRepository) *NotificationHandler {
-	return &NotificationHandler{svc: svc, attemptRepo: attemptRepo}
+func NewNotificationHandler(
+	svc *service.NotificationService,
+	attemptRepo domain.DeliveryAttemptRepository,
+	metricRepo domain.DeliveryMetricRepository,
+) *NotificationHandler {
+	return &NotificationHandler{svc: svc, attemptRepo: attemptRepo, metricRepo: metricRepo}
 }
 
 func (h *NotificationHandler) Send(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +209,50 @@ func (h *NotificationHandler) ListAttempts(w http.ResponseWriter, r *http.Reques
 	}
 
 	response.JSON(w, http.StatusOK, attempts)
+}
+
+// GetMetrics returns the delivery metric record for a notification. The metric
+// is created on first successful delivery and updated as richer status data
+// becomes available from the provider.
+func (h *NotificationHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		response.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	id, err := uuid.Parse(chi.URLParam(r, "notificationID"))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid notification ID")
+		return
+	}
+
+	// Verify the notification belongs to this tenant before returning metrics.
+	notif, err := h.svc.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "notification not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if notif.TenantID != claims.TenantID {
+		response.Error(w, http.StatusNotFound, "notification not found")
+		return
+	}
+
+	metric, err := h.metricRepo.GetByNotificationID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "delivery metrics not yet available")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, metric)
 }
 
 // sanitizeNotificationError returns a client-safe error message for errors

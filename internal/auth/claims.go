@@ -9,4 +9,5 @@ type TenantClaims struct {
 	jwt.RegisteredClaims
 	TenantID   uuid.UUID `json:"tenant_id"`
 	TenantSlug string    `json:"tenant_slug"`
+	IsAdmin    bool      `json:"is_admin,omitempty"`
 }

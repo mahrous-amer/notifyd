@@ -196,8 +196,11 @@ func (b *Bot) sendHTML(chatID int64, text string) {
 }
 
 func (b *Bot) sendError(chatID int64, description string, err error) {
+	// Log the full error server-side but never send it to Telegram.
+	// Error details may contain internal stack information, config data, or
+	// database messages that should not be exposed to chat clients.
 	b.logger.Error().Err(err).Str("description", description).Msg("bot handler error")
-	b.sendHTML(chatID, fmt.Sprintf("<b>Error:</b> %s\n<code>%s</code>", description, err.Error()))
+	b.sendHTML(chatID, fmt.Sprintf("<b>Error:</b> %s", description))
 }
 
 func (b *Bot) sendMessage(msg tgbotapi.MessageConfig) {
