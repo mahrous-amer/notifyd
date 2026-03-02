@@ -1,8 +1,8 @@
 # Binaries
 bin/
-api
-worker
-admin-bot
+/api
+/worker
+/admin-bot
 *.exe
 
 # Environment
