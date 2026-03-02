@@ -13,8 +13,8 @@ coverage.*
 .vscode/
 *.swp
 Thumbs.db
-api
-worker
-admin-bot
+/api
+/worker
+/admin-bot
 *.exe
 vendor/
