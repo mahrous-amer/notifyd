@@ -56,14 +56,14 @@ func main() {
 		Password: cfg.RedisPassword,
 		DB:       cfg.RedisDB,
 	})
-	defer redisCli.Close()
+	defer redisCli.Close() //nolint:errcheck
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
 		DB:       cfg.RedisDB,
 	})
-	defer asynqClient.Close()
+	defer asynqClient.Close() //nolint:errcheck
 
 	jwtMgr := auth.NewJWTManager(cfg.JWTSigningKey, cfg.JWTIssuer, cfg.JWTExpiration)
 

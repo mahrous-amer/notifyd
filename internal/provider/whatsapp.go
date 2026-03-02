@@ -98,7 +98,7 @@ func (w *WhatsAppProvider) Send(ctx context.Context, rawConfig json.RawMessage, 
 	if err != nil {
 		return &SendResponse{Success: false, ErrorMessage: err.Error()}, nil
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

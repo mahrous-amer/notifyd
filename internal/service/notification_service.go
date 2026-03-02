@@ -130,7 +130,7 @@ func (s *NotificationService) SendMulti(ctx context.Context, tenantID uuid.UUID,
 			return nil
 		})
 	}
-	g.Wait()
+	_ = g.Wait()
 	return results, errs
 }
 

@@ -39,7 +39,7 @@ func buildNotificationServiceFixture(t *testing.T) notificationServiceFixture {
 	// asynq.NewClient does not dial Redis eagerly, so a placeholder address is
 	// safe for tests that never exercise the Send code path.
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:0"})
-	t.Cleanup(func() { asynqClient.Close() })
+	t.Cleanup(func() { _ = asynqClient.Close() })
 
 	logger := zerolog.Nop()
 	svc := service.NewNotificationService(notifRepo, channelRepo, asynqClient, 3, logger)
