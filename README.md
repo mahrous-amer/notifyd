@@ -21,6 +21,8 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 - [Retry Strategy](#retry-strategy)
 - [Monitoring](#monitoring)
 - [Development](#development)
+- [Makefile Targets](#makefile-targets)
+- [Deployment](#deployment)
 - [Project Structure](#project-structure)
 - [License](#license)
 
@@ -30,15 +32,16 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 
 - **Multi-tenant** — each tenant has its own API key, API secret, and isolated channel configurations.
 - **JWT authentication** — tenants exchange their API key and secret for a short-lived JWT. All protected endpoints require a valid bearer token.
+- **Admin authentication** — separate admin API key/secret for tenant management endpoints.
 - **Three delivery channels** — Discord (webhook), Telegram (Bot API), and WhatsApp (Meta Cloud API).
 - **Guaranteed delivery** — notifications are enqueued in Redis via [Asynq](https://github.com/hibiken/asynq). The worker processes them asynchronously, independent of the API server.
 - **Exponential backoff retries** — failed deliveries are retried automatically up to a configurable maximum. Permanently failed tasks move to Asynq's dead letter queue.
 - **Delivery attempt tracking** — every attempt (success or failure) is recorded in PostgreSQL with timing, HTTP response data, and error messages.
 - **Notification status lifecycle** — `pending` → `processing` → `delivered` / `retrying` → `failed`.
 - **PostgreSQL storage** — tenants, channel configs, notifications, and delivery attempts all persist in PostgreSQL with proper foreign-key constraints and indexes.
-- **Docker-based deployment** — a single `docker compose up` starts every component.
-- **Asynqmon dashboard** — built-in web UI for monitoring queues, retrying dead-letter tasks, and inspecting workers.
+- **Docker-based deployment** — multi-stage Dockerfile with separate targets for API, worker, and admin bot. Non-root containers, stripped binaries, auto-migration on startup.
 - **Secrets never leave the database** — the worker fetches channel credentials from PostgreSQL at dispatch time, so secrets are not stored in Redis task payloads.
+- **Telegram admin bot** — conversational interface for tenant management and notification monitoring.
 
 ---
 
@@ -47,6 +50,11 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 ```
                           ┌──────────────────────────────────┐
                           │          REST clients             │
+                          └──────────────┬───────────────────┘
+                                         │ HTTPS (Cloudflare Tunnel)
+                          ┌──────────────▼───────────────────┐
+                          │            Caddy                  │
+                          │     (reverse proxy + TLS)         │
                           └──────────────┬───────────────────┘
                                          │ HTTP
                           ┌──────────────▼───────────────────┐
@@ -60,9 +68,9 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
                ┌─────────────────────────┼─────────────────────────┐
                │                         │                         │
     ┌──────────▼──────────┐  ┌──────────▼──────────┐  ┌──────────▼──────────┐
-    │      PostgreSQL      │  │        Redis         │  │      Asynqmon        │
-    │  tenants             │  │   Asynq task queue   │  │  Queue dashboard    │
-    │  channel_configs     │  │                      │  │  (:8081)            │
+    │      PostgreSQL      │  │        Redis         │  │   Telegram Admin    │
+    │  tenants             │  │   Asynq task queue   │  │   Bot (cmd/admin-   │
+    │  channel_configs     │  │                      │  │   bot)              │
     │  notifications       │  └──────────┬───────────┘  └─────────────────────┘
     │  delivery_attempts   │             │
     └──────────┬───────────┘  ┌──────────▼───────────┐
@@ -82,10 +90,9 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 |---|---|
 | `cmd/api` | HTTP server — handles tenant management, channel config CRUD, and notification submission |
 | `cmd/worker` | Asynq worker — dequeues notification tasks and delivers them to channels |
-| `cmd/admin-bot` | Optional Telegram bot for admin operations (tenant CRUD, notification status) |
+| `cmd/admin-bot` | Telegram bot for admin operations (tenant CRUD, notification status, stats) |
 | PostgreSQL | Persistent store for all domain data |
 | Redis | Asynq task queue backend |
-| Asynqmon | Read-only web UI for inspecting queue state |
 
 ### Request flow
 
@@ -102,64 +109,91 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- [golang-migrate](https://github.com/golang-migrate/migrate) CLI (for running migrations)
+- [Go 1.25+](https://go.dev/dl/) (for local development)
+- [golang-migrate](https://github.com/golang-migrate/migrate) CLI (for local migrations)
 
-### 1. Start all services
-
-```bash
-docker compose up -d --build
-```
-
-This starts PostgreSQL, Redis, the API server (port 8080), the worker, and Asynqmon (port 8081).
-
-### 2. Run database migrations
+### Option A: Full local stack with Docker
 
 ```bash
-DATABASE_URL="postgres://notifyd:password@localhost:5432/notifyd?sslmode=disable" \
-  make migrate-up
-```
+# Start everything (postgres, redis, api, worker)
+make docker-up
 
-The API is now reachable at `http://localhost:8080`.
-
-### 3. Verify the health endpoint
-
-```bash
+# Verify
 curl http://localhost:8080/health
 ```
 
-Expected response:
+### Option B: Local development (infra in Docker, services native)
 
-```json
-{"status": "ok"}
+```bash
+# Start postgres + redis
+make infra-up
+
+# Run migrations
+make migrate-up
+
+# Start API and worker in parallel
+make dev
+```
+
+### Option C: One-command dev start
+
+```bash
+# Starts infra, runs migrations, launches API server
+make dev-api
+```
+
+### Seed test data
+
+```bash
+make seed
+```
+
+This creates a bootstrap tenant:
+- **API Key:** `test-api-key-123`
+- **API Secret:** `test-secret-12345`
+
+### Verify
+
+```bash
+curl http://localhost:8080/health
+# {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}
 ```
 
 ---
 
 ## Configuration
 
-Configuration is read from environment variables. The API and worker processes share most variables; a few are server-specific.
+Configuration is read from environment variables. Copy `.env.example` to `.env` and adjust values.
+
+```bash
+cp .env.example .env
+```
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `API_PORT` | `8080` | No | Port the API server listens on |
-| `SHUTDOWN_TIMEOUT` | `15s` | No | Graceful shutdown timeout (applies to both API and worker) |
-| `DATABASE_URL` | — | **Yes** | PostgreSQL connection string (e.g. `postgres://user:pass@host:5432/db?sslmode=disable`) |
+| `SHUTDOWN_TIMEOUT` | `15s` | No | Graceful shutdown timeout |
+| `DATABASE_URL` | — | **Yes** | PostgreSQL connection string |
 | `DB_MAX_CONNS` | `25` | No | Maximum connections in the pgxpool |
-| `DB_MIN_CONNS` | `5` | No | Minimum idle connections in the pgxpool |
-| `DB_MAX_CONN_LIFETIME` | `30m` | No | Maximum lifetime of a connection before recycling |
-| `DB_MAX_CONN_IDLE_TIME` | `5m` | No | Maximum time a connection can sit idle before being closed |
-| `DB_HEALTH_CHECK_PERIOD` | `30s` | No | How often idle connections are health-checked |
+| `DB_MIN_CONNS` | `5` | No | Minimum idle connections |
+| `DB_MAX_CONN_LIFETIME` | `30m` | No | Maximum lifetime of a connection |
+| `DB_MAX_CONN_IDLE_TIME` | `5m` | No | Maximum idle time before closing |
+| `DB_HEALTH_CHECK_PERIOD` | `30s` | No | Health check interval for idle connections |
 | `REDIS_ADDR` | `127.0.0.1:6379` | No | Redis address |
 | `REDIS_PASSWORD` | `""` | No | Redis password |
 | `REDIS_DB` | `0` | No | Redis database index |
-| `JWT_SIGNING_KEY` | — | **Yes** | HMAC-SHA256 signing key for JWTs. Use a random 256-bit value in production. |
+| `JWT_SIGNING_KEY` | — | **Yes** | HMAC-SHA256 signing key (use a random 256-bit value) |
 | `JWT_EXPIRATION` | `1h` | No | JWT token lifetime |
 | `JWT_ISSUER` | `notifyd` | No | JWT issuer claim |
 | `WORKER_CONCURRENCY` | `10` | No | Number of concurrent worker goroutines |
 | `MAX_RETRIES` | `5` | No | Maximum delivery attempts per notification |
-| `MIN_RETRY_DELAY` | `15s` | No | Minimum delay before the first retry |
+| `MIN_RETRY_DELAY` | `15s` | No | Minimum delay before first retry |
 | `MAX_RETRY_DELAY` | `30m` | No | Maximum delay cap for exponential backoff |
-| `LOG_LEVEL` | `info` | No | Zerolog log level (`debug`, `info`, `warn`, `error`) |
+| `LOG_LEVEL` | `info` | No | Log level (`debug`, `info`, `warn`, `error`) |
+| `ADMIN_API_KEY` | — | No | Admin API key for tenant management |
+| `ADMIN_API_SECRET` | — | No | Admin API secret for tenant management |
+| `TELEGRAM_BOT_TOKEN` | — | No | Telegram bot token (for admin bot) |
+| `TELEGRAM_ADMIN_CHAT` | — | No | Telegram chat ID authorized for admin bot |
 
 > `JWT_SIGNING_KEY` and `DATABASE_URL` are required. The process will refuse to start without them.
 
@@ -167,10 +201,12 @@ Configuration is read from environment variables. The API and worker processes s
 
 ## API Reference
 
+**Full API documentation:** [`docs/API.md`](docs/API.md)
+
 ### Base URL
 
 ```
-http://localhost:8080
+https://bse_notify_bot.fluxintek.com
 ```
 
 ### Response format
@@ -178,21 +214,16 @@ http://localhost:8080
 All responses use `Content-Type: application/json`.
 
 Success:
-
 ```json
-{ ...resource fields... }
+{ "...resource fields..." }
 ```
 
 Error:
-
 ```json
-{
-  "error": "human-readable message"
-}
+{ "error": "human-readable message" }
 ```
 
 Paginated list:
-
 ```json
 {
   "data": [...],
@@ -204,7 +235,7 @@ Paginated list:
 
 ### Authentication
 
-All endpoints except `GET /health` and `POST /auth/token` require a bearer token in the `Authorization` header:
+All endpoints except `GET /health` and `POST /auth/token` require a bearer token:
 
 ```
 Authorization: Bearer <token>
@@ -216,16 +247,23 @@ Authorization: Bearer <token>
 
 Exchange an API key and secret for a JWT.
 
-**Request**
+**Tenant authentication:**
 
-```json
-{
-  "api_key": "string",
-  "api_secret": "string"
-}
+```bash
+curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"test-api-key-123","api_secret":"test-secret-12345"}'
 ```
 
-**Response 200**
+**Admin authentication:**
+
+```bash
+curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}'
+```
+
+**Response 200:**
 
 ```json
 {
@@ -233,8 +271,6 @@ Exchange an API key and secret for a JWT.
   "expires_in": "1h0m0s"
 }
 ```
-
-**Error responses**
 
 | Status | Reason |
 |---|---|
@@ -246,376 +282,369 @@ Exchange an API key and secret for a JWT.
 
 ### Channels
 
-Channel configs store the credentials and settings for a specific messaging destination. A tenant can have multiple configs of the same channel type (e.g., multiple Discord webhooks).
-
-Channel config names must be unique per tenant per channel type.
-
----
+Channel configs store the credentials and settings for a specific messaging destination.
 
 #### GET /channels
 
 List all channel configs for the authenticated tenant.
 
-**Response 200**
-
-```json
-[
-  {
-    "id": "uuid",
-    "tenant_id": "uuid",
-    "channel": "discord",
-    "name": "ops-alerts",
-    "config": { "webhook_url": "https://discord.com/api/webhooks/..." },
-    "is_active": true,
-    "created_at": "2024-01-01T00:00:00Z",
-    "updated_at": "2024-01-01T00:00:00Z"
-  }
-]
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/channels \
+  -H "Authorization: Bearer $TOKEN"
 ```
-
----
 
 #### POST /channels
 
 Create a new channel config.
 
-**Request**
+```bash
+# Telegram
+curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "telegram",
+    "name": "ops-alerts",
+    "config": {
+      "bot_token": "123456:ABC-DEF...",
+      "chat_id": "-1001234567890"
+    }
+  }'
+
+# Discord
+curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "discord",
+    "name": "dev-notifications",
+    "config": {
+      "webhook_url": "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+    }
+  }'
+
+# WhatsApp
+curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "whatsapp",
+    "name": "customer-alerts",
+    "config": {
+      "phone_number_id": "1234567890",
+      "access_token": "EAAxxxxxx...",
+      "recipient": "15551234567"
+    }
+  }'
+```
+
+Optional delivery preferences:
 
 ```json
 {
-  "channel": "discord",
-  "name": "ops-alerts",
-  "config": {
-    "webhook_url": "https://discord.com/api/webhooks/123/abc"
+  "delivery_prefs": {
+    "priority": "critical",
+    "max_retries": 10,
+    "format_mode": "markdown"
   }
 }
 ```
 
-The `config` field is validated against the channel type before the record is saved. See [Channel Configuration](#channel-configuration) for the required fields per channel.
-
-**Response 201** — the created channel config object.
-
----
+| Field | Values |
+|-------|--------|
+| `priority` | `critical`, `normal`, `low` |
+| `format_mode` | `plain`, `markdown`, `html` |
+| `max_retries` | non-negative integer |
 
 #### GET /channels/{id}
 
-Get a single channel config by UUID. Returns 404 if it belongs to a different tenant.
-
-**Response 200** — the channel config object.
-
----
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 #### PATCH /channels/{id}
 
-Update a channel config. All fields are optional; only provided fields are changed.
+Update a channel config (all fields optional):
 
-**Request**
-
-```json
-{
-  "name": "new-name",
-  "config": { "webhook_url": "https://discord.com/api/webhooks/456/xyz" },
-  "is_active": false
-}
+```bash
+curl -s -X PATCH https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"new-name","is_active":false}'
 ```
-
-**Response 200** — the updated channel config object.
-
----
 
 #### DELETE /channels/{id}
 
-Delete a channel config. Returns 204 on success.
+```bash
+curl -s -X DELETE https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ---
 
 ### Notifications
 
----
-
 #### POST /notifications/send
 
 Send a notification to a single channel.
 
-**Request**
-
-```json
-{
-  "channel_config_id": "uuid",
-  "subject": "Optional subject line",
-  "body": "Message body (required)",
-  "metadata": {}
-}
+```bash
+curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel_config_id": "a8fd4ddd-c8ba-4b25-b1e2-eacaa8f4db9b",
+    "subject": "Deploy Complete",
+    "body": "v1.0 deployed successfully to production"
+  }'
 ```
 
-The `body` field is required. `subject` and `metadata` are optional. `metadata` is stored as-is and forwarded to the worker but is not sent to the provider.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `channel_config_id` | yes | UUID of the channel config |
+| `body` | yes | Notification body text |
+| `subject` | no | Subject/title line |
+| `metadata` | no | Arbitrary JSON metadata |
 
-**Response 202** — the created notification object. Delivery happens asynchronously.
+**Response 202:**
 
 ```json
 {
-  "id": "uuid",
-  "tenant_id": "uuid",
-  "channel_config_id": "uuid",
-  "channel": "discord",
-  "subject": "Optional subject line",
-  "body": "Message body",
+  "id": "f01d1800-0a86-428a-9a1c-82968893f204",
+  "channel": "telegram",
   "status": "pending",
   "retry_count": 0,
   "max_retries": 5,
-  "created_at": "2024-01-01T00:00:00Z",
-  "updated_at": "2024-01-01T00:00:00Z"
+  "created_at": "2026-03-02T01:10:13Z"
 }
 ```
-
----
 
 #### POST /notifications/send-multi
 
-Send the same logical message to multiple channels in a single request.
+Send to multiple channels in one request (1–50 items):
 
-**Request**
-
-```json
-{
-  "channels": [
-    {
-      "channel_config_id": "uuid-discord",
-      "subject": "Alert",
-      "body": "Deployment complete"
-    },
-    {
-      "channel_config_id": "uuid-telegram",
-      "body": "Deployment complete"
-    }
-  ]
-}
+```bash
+curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send-multi \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channels": [
+      {
+        "channel_config_id": "uuid-telegram",
+        "subject": "Alert",
+        "body": "Server CPU at 95%"
+      },
+      {
+        "channel_config_id": "uuid-discord",
+        "body": "Server CPU at 95%"
+      }
+    ]
+  }'
 ```
 
-**Response 202**
+**Response 202:** Partial success is possible.
 
 ```json
 {
-  "sent": [
-    { ...notification object... },
-    { ...notification object... }
-  ],
+  "sent": [ { "...notification..." }, { "...notification..." } ],
   "errors": []
 }
 ```
 
-If some channels fail validation, the successfully enqueued notifications are returned in `sent` and the failures are listed in `errors`. The HTTP status is always 202 as long as the request is structurally valid.
-
----
-
 #### GET /notifications
 
-List notifications for the authenticated tenant with optional filtering and pagination.
+List notifications with optional filtering:
 
-**Query parameters**
+```bash
+# All notifications
+curl -s "https://bse_notify_bot.fluxintek.com/notifications" \
+  -H "Authorization: Bearer $TOKEN"
 
-| Parameter | Type | Description |
-|---|---|---|
-| `status` | string | Filter by status: `pending`, `processing`, `delivered`, `retrying`, `failed` |
-| `channel` | string | Filter by channel type: `discord`, `telegram`, `whatsapp` |
-| `limit` | integer | Page size (default 20) |
-| `offset` | integer | Page offset (default 0) |
+# Filter by status
+curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=delivered&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
 
-**Response 200** — paginated list response.
+# Filter by channel
+curl -s "https://bse_notify_bot.fluxintek.com/notifications?channel=telegram&offset=20" \
+  -H "Authorization: Bearer $TOKEN"
 
----
+# Combined
+curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=failed&channel=discord&limit=50" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 20 | Page size (1–100) |
+| `offset` | int | 0 | Pagination offset |
+| `status` | string | — | `pending`, `processing`, `delivered`, `retrying`, `failed` |
+| `channel` | string | — | `telegram`, `discord`, `whatsapp` |
 
 #### GET /notifications/{id}
 
-Get a single notification by UUID. Returns 404 if it belongs to a different tenant.
-
-**Response 200** — the notification object.
-
----
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 #### GET /notifications/{id}/attempts
 
-Get the delivery attempt history for a notification.
+View delivery attempt history:
 
-**Response 200**
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ```json
 [
   {
-    "id": "uuid",
-    "notification_id": "uuid",
     "attempt_number": 1,
-    "status": "failure",
-    "error_message": "discord API returned 429: ...",
-    "provider_response": { ... },
-    "duration_ms": 312,
-    "attempted_at": "2024-01-01T00:00:05Z"
-  },
-  {
-    "id": "uuid",
-    "notification_id": "uuid",
-    "attempt_number": 2,
     "status": "success",
-    "provider_response": { ... },
-    "duration_ms": 198,
-    "attempted_at": "2024-01-01T00:01:30Z"
+    "duration_ms": 666,
+    "attempted_at": "2026-03-02T01:10:13Z"
   }
 ]
+```
+
+#### GET /notifications/{id}/metrics
+
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/metrics \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
 
 ### Admin: Tenants
 
-Admin endpoints are also JWT-protected. In the current implementation there is no role distinction between a regular tenant token and an admin token — access control at the admin boundary is a deployment concern.
+Admin endpoints require an admin JWT (obtained with `ADMIN_API_KEY` / `ADMIN_API_SECRET`).
 
----
+```bash
+ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}' \
+  | jq -r .token)
+```
 
 #### POST /admin/tenants
 
-Create a new tenant. The API key and secret are generated server-side and returned **only at creation time**. Store the secret securely — it cannot be retrieved again.
-
-**Request**
-
-```json
-{
-  "name": "Acme Corp",
-  "slug": "acme"
-}
+```bash
+curl -s -X POST https://bse_notify_bot.fluxintek.com/admin/tenants \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"name":"Acme Corp","slug":"acme"}'
 ```
 
-The `slug` must be unique and is used as the JWT `tenant_slug` claim. It should be URL-safe (lowercase alphanumeric and hyphens).
-
-**Response 201**
-
-```json
-{
-  "tenant": {
-    "id": "uuid",
-    "name": "Acme Corp",
-    "slug": "acme",
-    "api_key": "a3f1...",
-    "is_active": true,
-    "created_at": "2024-01-01T00:00:00Z",
-    "updated_at": "2024-01-01T00:00:00Z"
-  },
-  "api_key": "a3f1...",
-  "api_secret": "9b2c..."
-}
-```
-
----
+The response includes `api_key` and `api_secret` — store the secret securely, it cannot be retrieved again.
 
 #### GET /admin/tenants
 
-List all tenants with pagination.
-
-**Query parameters:** `limit`, `offset`
-
-**Response 200** — paginated list response.
-
----
+```bash
+curl -s "https://bse_notify_bot.fluxintek.com/admin/tenants?limit=20&offset=0" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
 
 #### GET /admin/tenants/{id}
 
-Get a single tenant by UUID.
-
-**Response 200** — the tenant object.
-
----
+```bash
+curl -s https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
 
 #### PATCH /admin/tenants/{id}
 
-Update a tenant's name or active status.
-
-**Request**
-
-```json
-{
-  "name": "Acme Corporation",
-  "is_active": false
-}
+```bash
+curl -s -X PATCH https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"name":"Acme Corporation","is_active":false}'
 ```
-
-**Response 200** — the updated tenant object.
-
----
 
 #### DELETE /admin/tenants/{id}
 
-Delete a tenant. All associated channel configs are cascade-deleted. Returns 204 on success.
+```bash
+curl -s -X DELETE https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
 
 ---
 
 ## End-to-End Walkthrough
 
-The following curl commands demonstrate the full lifecycle: create a tenant, authenticate, configure a Discord channel, send a notification, and check its delivery status.
-
-### 1. Create a tenant
+Complete workflow from tenant creation to notification delivery:
 
 ```bash
-curl -s -X POST http://localhost:8080/admin/tenants \
-  -H "Authorization: Bearer <admin-token>" \
+# 1. Authenticate as admin
+ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
-  -d '{"name": "Acme Corp", "slug": "acme"}' | jq .
-```
+  -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}' \
+  | jq -r .token)
 
-Save the `api_key` and `api_secret` from the response. The secret is shown only once.
-
-### 2. Get a JWT
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
+# 2. Create a tenant
+curl -s -X POST https://bse_notify_bot.fluxintek.com/admin/tenants \
   -H "Content-Type: application/json" \
-  -d '{
-    "api_key": "<api_key>",
-    "api_secret": "<api_secret>"
-  }' | jq -r .token)
-```
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"name":"Acme Corp","slug":"acme"}'
+# → Save api_key and api_secret from response
 
-### 3. Create a Discord channel config
+# 3. Authenticate as the tenant
+TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"<tenant_api_key>","api_secret":"<tenant_api_secret>"}' \
+  | jq -r .token)
 
-```bash
-curl -s -X POST http://localhost:8080/channels \
+# 4. Create a Telegram channel config
+CHANNEL_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
   -d '{
-    "channel": "discord",
+    "channel": "telegram",
     "name": "ops-alerts",
     "config": {
-      "webhook_url": "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+      "bot_token": "123456:ABC-DEF...",
+      "chat_id": "-1001234567890"
     }
-  }' | jq .
-```
+  }' | jq -r .id)
 
-Save the `id` from the response as `CHANNEL_ID`.
-
-### 4. Send a notification
-
-```bash
-curl -s -X POST http://localhost:8080/notifications/send \
-  -H "Authorization: Bearer $TOKEN" \
+# 5. Send a notification
+NOTIF_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d "{
     \"channel_config_id\": \"$CHANNEL_ID\",
-    \"subject\": \"Deployment finished\",
+    \"subject\": \"Deploy Complete\",
     \"body\": \"Production deploy v1.4.2 completed successfully.\"
-  }" | jq .
-```
+  }" | jq -r .id)
 
-The response has `"status": "pending"`. Save the `id` as `NOTIFICATION_ID`.
-
-### 5. Check delivery status
-
-```bash
-curl -s http://localhost:8080/notifications/$NOTIFICATION_ID \
+# 6. Check delivery status (wait a moment for async processing)
+sleep 2
+curl -s https://bse_notify_bot.fluxintek.com/notifications/$NOTIF_ID \
   -H "Authorization: Bearer $TOKEN" | jq .status
-```
+# → "delivered"
 
-After the worker processes the task this will read `"delivered"`. To see each attempt:
+# 7. View delivery attempts
+curl -s https://bse_notify_bot.fluxintek.com/notifications/$NOTIF_ID/attempts \
+  -H "Authorization: Bearer $TOKEN" | jq .
 
-```bash
-curl -s http://localhost:8080/notifications/$NOTIFICATION_ID/attempts \
+# 8. Send to multiple channels at once
+curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send-multi \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"channels\": [
+      {\"channel_config_id\": \"$CHANNEL_ID\", \"subject\": \"Alert\", \"body\": \"CPU at 95%\"},
+      {\"channel_config_id\": \"$CHANNEL_ID\", \"body\": \"Disk usage critical\"}
+    ]
+  }"
+
+# 9. List all delivered notifications
+curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=delivered" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# 10. List failed notifications
+curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=failed" \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
@@ -623,7 +652,7 @@ curl -s http://localhost:8080/notifications/$NOTIFICATION_ID/attempts \
 
 ## Channel Configuration
 
-The `config` field in a channel config is a JSON object. Its shape depends on the channel type. The API validates the config against the expected schema before saving.
+The `config` field in a channel config is a JSON object validated against the channel type.
 
 ### Discord
 
@@ -637,7 +666,7 @@ The `config` field in a channel config is a JSON object. Its shape depends on th
 |---|---|---|
 | `webhook_url` | Yes | Full Discord webhook URL |
 
-Messages are sent as Discord webhook payloads. If `subject` is provided it is prepended to the body in bold: `**subject**\nbody`.
+Messages are sent as Discord webhook payloads. If `subject` is provided it is prepended in bold.
 
 ### Telegram
 
@@ -653,7 +682,7 @@ Messages are sent as Discord webhook payloads. If `subject` is provided it is pr
 | `bot_token` | Yes | Bot API token from @BotFather |
 | `chat_id` | Yes | Target chat, channel, or group ID |
 
-Messages are sent via `sendMessage` with `parse_mode: Markdown`. If `subject` is provided it is prepended in bold: `*subject*\nbody`.
+Messages are sent via `sendMessage` with `parse_mode: Markdown`.
 
 ### WhatsApp
 
@@ -671,13 +700,11 @@ Messages are sent via `sendMessage` with `parse_mode: Markdown`. If `subject` is
 | `access_token` | Yes | Meta access token with `whatsapp_business_messaging` permission |
 | `recipient` | Yes | Recipient phone number in E.164 format (digits only, no `+`) |
 
-Messages are sent via the Meta Cloud API v19.0 as plain text. If `subject` is provided it is prepended in bold: `*subject*\nbody`.
-
 ---
 
 ## Telegram Admin Bot
 
-notifyd includes an optional Telegram bot (`cmd/admin-bot`) that provides a conversational interface for tenant management and notification monitoring. The bot connects directly to the service layer (not the HTTP API), so it works even if the API server is down.
+notifyd includes a Telegram bot (`cmd/admin-bot`) for conversational admin operations. It connects directly to the service layer (not the HTTP API), so it works even if the API server is down.
 
 ### Setup
 
@@ -685,15 +712,15 @@ notifyd includes an optional Telegram bot (`cmd/admin-bot`) that provides a conv
 2. Get your Telegram chat ID (send `/start` to [@userinfobot](https://t.me/userinfobot)).
 3. Set the environment variables:
    ```bash
-   export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
-   export TELEGRAM_ADMIN_CHAT="your-chat-id"
+   TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+   TELEGRAM_ADMIN_CHAT="your-chat-id"
    ```
 4. Start the bot:
    ```bash
    make admin-bot
    ```
 
-The bot only responds to messages from the configured admin chat ID. All other messages are rejected.
+The bot only responds to messages from the configured admin chat ID.
 
 ### Commands
 
@@ -704,35 +731,26 @@ The bot only responds to messages from the configured admin chat ID. All other m
 | `/tenant <id>` | Show tenant details |
 | `/create_tenant <name> <slug>` | Create a new tenant (returns api_key + api_secret) |
 | `/toggle_tenant <id>` | Toggle a tenant's active status |
-| `/delete_tenant <id>` | Delete a tenant (with inline keyboard confirmation) |
+| `/delete_tenant <id>` | Delete a tenant (with confirmation) |
 | `/notifications <tenant_id>` | List recent notifications for a tenant |
 | `/notification <id>` | Show notification details |
 | `/stats` | Show total tenants and notification counts by status |
-
-### Docker
-
-The admin bot runs as an optional Docker Compose profile:
-
-```bash
-docker compose --profile admin-bot up -d
-```
-
-Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT` in your environment or `.env` file before starting.
 
 ---
 
 ## Retry Strategy
 
-Asynq manages retry scheduling using exponential backoff. notifyd configures each task with:
+Asynq manages retry scheduling using exponential backoff:
 
-- **Max retries** — controlled by `MAX_RETRIES` (default: 5). A notification can be attempted at most `MAX_RETRIES + 1` times (one initial attempt plus up to five retries).
-- **Backoff formula** — Asynq's default exponential backoff: delay grows with each retry, bounded by `MAX_RETRY_DELAY` (default: 30 minutes). The first retry waits approximately `MIN_RETRY_DELAY` (default: 15 seconds).
-- **Per-task timeout** — each delivery attempt has a 30-second deadline before the context is cancelled.
+- **Max retries** — controlled by `MAX_RETRIES` (default: 5).
+- **Backoff** — exponential, bounded by `MAX_RETRY_DELAY` (default: 30m). First retry waits `MIN_RETRY_DELAY` (default: 15s).
+- **Per-task timeout** — each delivery attempt has a 30-second deadline.
 
-### Status transitions during retry
+### Status transitions
 
 | Event | Notification status |
 |---|---|
+| Task enqueued | `pending` |
 | Task dequeued | `processing` |
 | Provider call succeeds | `delivered` |
 | Provider call fails, retries remain | `retrying` |
@@ -740,23 +758,15 @@ Asynq manages retry scheduling using exponential backoff. notifyd configures eac
 
 ### Dead letter queue
 
-When a task exceeds its maximum retry count, Asynq moves it to the dead letter queue. The `NotifyErrorHandler` intercepts this event and updates the notification status to `failed` with the final error message. Dead-letter tasks are visible in the Asynqmon dashboard and can be re-enqueued manually from there.
+When a task exceeds max retries, Asynq moves it to the dead letter queue. The `NotifyErrorHandler` updates the notification to `failed` with the final error message.
 
 ### Security note on secrets
 
-Channel credentials are intentionally not included in the Redis task payload. The worker fetches them from PostgreSQL at execution time using the `channel_config_id` stored in the task. This means compromising the Redis instance does not expose messaging credentials.
+Channel credentials are not included in Redis task payloads. The worker fetches them from PostgreSQL at execution time using the `channel_config_id`. Compromising Redis does not expose messaging credentials.
 
 ---
 
 ## Monitoring
-
-### Asynqmon
-
-A read-only Asynqmon instance runs at [http://localhost:8081](http://localhost:8081). It provides:
-
-- Queue metrics (active, pending, scheduled, retry, dead letter)
-- Per-task inspection and manual retry
-- Worker server status
 
 ### Health endpoint
 
@@ -764,11 +774,11 @@ A read-only Asynqmon instance runs at [http://localhost:8081](http://localhost:8
 GET /health
 ```
 
-Returns HTTP 200 with `{"status": "ok", "checks": {"postgres": "ok", "redis": "ok"}}` when all backends are reachable. Returns HTTP 503 with `"status": "degraded"` if any dependency is down. Suitable for use as a Docker or load-balancer health check.
+Returns HTTP 200 with `{"status":"ok","checks":{"postgres":"ok","redis":"ok"}}` when healthy. Returns HTTP 503 with `"status":"degraded"` if any dependency is down.
 
 ### Logs
 
-Both the API and worker use [zerolog](https://github.com/rs/zerolog) for structured JSON logging. Set `LOG_LEVEL` to `debug` for verbose output including per-request details.
+Both API and worker use [zerolog](https://github.com/rs/zerolog) for structured JSON logging. Set `LOG_LEVEL=debug` for verbose output.
 
 ---
 
@@ -776,7 +786,7 @@ Both the API and worker use [zerolog](https://github.com/rs/zerolog) for structu
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.25+
 - PostgreSQL 16
 - Redis 7
 - [golang-migrate](https://github.com/golang-migrate/migrate) CLI
@@ -784,59 +794,173 @@ Both the API and worker use [zerolog](https://github.com/rs/zerolog) for structu
 
 ### Run locally without Docker
 
-**1. Start dependencies**
-
 ```bash
-# PostgreSQL and Redis via Docker (infrastructure only)
-docker compose up -d postgres redis
-```
+# 1. Start dependencies
+make infra-up
 
-**2. Export environment variables**
-
-```bash
-export DATABASE_URL="postgres://notifyd:password@localhost:5432/notifyd?sslmode=disable"
-export REDIS_ADDR="localhost:6379"
-export JWT_SIGNING_KEY="local-dev-key-change-in-production"
-```
-
-**3. Run migrations**
-
-```bash
+# 2. Run migrations
 make migrate-up
+
+# 3. Start API + worker
+make dev
 ```
-
-**4. Start the API server**
-
-```bash
-make api
-```
-
-**5. Start the worker** (in a separate terminal)
-
-```bash
-make worker
-```
-
-### Makefile targets
-
-| Target | Description |
-|---|---|
-| `make api` | Run the API server with `go run` |
-| `make worker` | Run the worker with `go run` |
-| `make migrate-up` | Apply all pending migrations |
-| `make migrate-down` | Roll back the most recent migration |
-| `make migrate-create name=<name>` | Create a new migration file pair |
-| `make test` | Run all tests with race detection |
-| `make lint` | Run golangci-lint |
-| `make docker-up` | Build images and start all services |
-| `make docker-down` | Stop all services |
-| `make docker-logs` | Tail logs for all services |
 
 ### Running tests
 
 ```bash
 make test
 ```
+
+### End-to-end tests
+
+```bash
+# Requires running API + worker
+make seed   # Create test tenant
+make e2e    # Run e2e test suite
+```
+
+---
+
+## Makefile Targets
+
+### Build
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Compile all binaries (`api`, `worker`, `admin-bot`) to `./bin/` |
+
+### Run (local, no Docker)
+
+| Target | Description |
+|--------|-------------|
+| `make api` | Run the API server with `go run` |
+| `make worker` | Run the async worker with `go run` |
+| `make admin-bot` | Run the Telegram admin bot with `go run` |
+
+### Migrations
+
+| Target | Description |
+|--------|-------------|
+| `make migrate-up` | Apply all pending migrations |
+| `make migrate-down` | Roll back the last migration |
+| `make migrate-create name=add_xyz` | Create a new migration file pair |
+| `make migrate-reset` | Drop all tables then re-apply migrations |
+
+### Quality
+
+| Target | Description |
+|--------|-------------|
+| `make test` | Run unit tests with race detector |
+| `make lint` | Run golangci-lint |
+| `make vet` | Run go vet |
+| `make check` | Run vet + lint + tests |
+| `make coverage` | Run tests with coverage report (outputs `coverage.html`) |
+
+### Infrastructure (Postgres + Redis only)
+
+| Target | Description |
+|--------|-------------|
+| `make infra-up` | Start Postgres and Redis containers |
+| `make infra-down` | Stop Postgres and Redis containers |
+| `make infra-logs` | Tail Postgres and Redis logs |
+
+### Local dev (infra + run)
+
+| Target | Description |
+|--------|-------------|
+| `make dev` | Start infra, run migrations, start API + worker in parallel |
+| `make dev-api` | Start infra, run migrations, start API only |
+| `make dev-worker` | Start infra, start worker only |
+
+### Docker Compose (full stack)
+
+| Target | Description |
+|--------|-------------|
+| `make docker-build` | Build all Docker images |
+| `make docker-up` | Build and deploy full stack |
+| `make docker-down` | Tear down all containers |
+| `make docker-logs` | Tail all Docker logs |
+
+### Production deployment
+
+| Target | Description |
+|--------|-------------|
+| `make prod-up` | Deploy production stack (`docker-compose.prod.yml`) |
+| `make prod-down` | Tear down production stack |
+| `make prod-logs` | Tail production logs |
+
+### Shared infrastructure deployment
+
+| Target | Description |
+|--------|-------------|
+| `make deploy-db-init` | Create notifyd user and database on shared Postgres |
+| `make deploy` | Deploy to shared infrastructure (`docker-compose.deploy.yml`) |
+| `make deploy-down` | Tear down deployed services |
+| `make deploy-logs` | Tail deployed service logs |
+
+### Testing & Seeding
+
+| Target | Description |
+|--------|-------------|
+| `make seed` | Insert a bootstrap tenant for testing |
+| `make e2e` | Run end-to-end test suite (requires running API) |
+
+### Load Testing
+
+| Target | Description |
+|--------|-------------|
+| `make load-test` | Run k6 full scenario load test |
+| `make load-test-auth` | Load test auth endpoint |
+| `make load-test-send` | Load test notification sending |
+| `make load-test-query` | Load test query endpoints |
+
+### Cleanup
+
+| Target | Description |
+|--------|-------------|
+| `make clean` | Remove build artifacts and stop containers |
+
+---
+
+## Deployment
+
+### Docker images
+
+The multi-stage Dockerfile produces three separate images:
+
+```bash
+docker build --target api -t notifyd-api .
+docker build --target worker -t notifyd-worker .
+docker build --target admin-bot -t notifyd-admin-bot .
+```
+
+All images:
+- Run as non-root user (`appuser`, UID 10001)
+- Use stripped binaries (`-ldflags="-s -w"`)
+- Based on `alpine:3.20`
+- API image includes `golang-migrate` and runs migrations automatically on startup
+
+### Shared infrastructure
+
+For deployment alongside existing Postgres/Redis (e.g., in a shared infrastructure repo):
+
+```bash
+# First time: create database
+make deploy-db-init
+
+# Deploy
+make deploy
+
+# With admin bot
+docker compose -f docker-compose.deploy.yml --profile admin-bot up -d
+```
+
+### CI/CD
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
+1. **lint** — `go vet` + `golangci-lint`
+2. **test** — `go test -race` with Postgres/Redis service containers
+3. **build** — Docker images for all 3 targets, pushed to GHCR on master
 
 ---
 
@@ -845,27 +969,34 @@ make test
 ```
 notifyd/
 ├── cmd/
-│   ├── api/           # API server entry point
-│   ├── worker/        # Worker server entry point
-│   └── admin-bot/     # Telegram admin bot entry point
+│   ├── api/              # API server entry point
+│   ├── worker/           # Worker server entry point
+│   └── admin-bot/        # Telegram admin bot entry point
 ├── internal/
-│   ├── auth/          # JWT manager and HTTP middleware
-│   ├── bot/           # Telegram admin bot (commands, formatting)
-│   ├── config/        # Environment-based configuration
-│   ├── domain/        # Core types, interfaces, and status constants
-│   ├── handler/       # HTTP handlers (auth, channel, notification, tenant, health)
-│   ├── provider/      # Channel provider implementations (Discord, Telegram, WhatsApp)
-│   ├── repository/    # PostgreSQL repository implementations
-│   ├── router/        # Chi router wiring
-│   ├── service/       # Business logic (tenant, channel, notification services)
-│   └── worker/        # Asynq task definitions, dispatcher, and error handler
-├── migrations/        # SQL migration files (golang-migrate)
+│   ├── auth/             # JWT manager, middleware, claims
+│   ├── bot/              # Telegram admin bot (commands, formatting)
+│   ├── config/           # Environment-based configuration
+│   ├── domain/           # Core types, interfaces, errors, status constants
+│   ├── handler/          # HTTP handlers (auth, channel, notification, tenant, health)
+│   ├── provider/         # Channel providers (Discord, Telegram, WhatsApp)
+│   ├── repository/       # PostgreSQL repository implementations
+│   ├── router/           # Chi router wiring
+│   ├── service/          # Business logic (tenant, channel, notification)
+│   └── worker/           # Asynq task definitions, dispatcher, error handler
+├── migrations/           # SQL migration files (golang-migrate)
+├── scripts/              # Helper scripts (e2e tests, bcrypt tool)
+├── loadtest/             # k6 load test scenarios
+├── docs/                 # API documentation
 ├── pkg/
-│   └── response/      # Shared HTTP response helpers
-├── docker-compose.yml
-├── Dockerfile
+│   └── response/         # Shared HTTP response helpers
+├── docker-compose.yml          # Development stack
+├── docker-compose.prod.yml     # Standalone production stack
+├── docker-compose.deploy.yml   # Shared infrastructure deployment
+├── Dockerfile                  # Multi-stage (api, worker, admin-bot)
+├── entrypoint.sh               # Auto-migration entrypoint for API
 ├── go.mod
-└── Makefile
+├── Makefile
+└── .github/workflows/ci.yml   # CI/CD pipeline
 ```
 
 ---
