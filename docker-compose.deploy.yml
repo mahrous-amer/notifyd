@@ -1,0 +1,81 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    ports:
+      - "${API_PORT:-8080}:8080"
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+    networks:
+      - infra
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+    networks:
+      - infra
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  admin-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: admin-bot
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_CHAT: ${TELEGRAM_ADMIN_CHAT}
+    networks:
+      - infra
+    profiles:
+      - admin-bot
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  infra:
+    external: true
+    name: infrastructure_frontend

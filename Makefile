@@ -16,6 +16,7 @@ MIGRATE         = migrate
         dev dev-api dev-worker \
         docker-up docker-down docker-logs docker-build \
         prod-up prod-down prod-logs \
+        deploy deploy-down deploy-logs deploy-db-init \
         e2e seed clean \
         load-test load-test-auth load-test-send load-test-query coverage
 
@@ -120,6 +121,29 @@ prod-down: ## Tear down production stack
 
 prod-logs: ## Tail production logs
 	$(DOCKER_COMPOSE) -f docker-compose.prod.yml logs -f
+
+# ─── Deploy (shared infra — uses existing Postgres & Redis) ────────────────
+DEPLOY_COMPOSE = $(DOCKER_COMPOSE) -f docker-compose.deploy.yml
+
+deploy-db-init: ## Create notifyd user and database on shared Postgres
+	@docker exec shared-postgres psql -U postgres -c \
+		"SELECT 1 FROM pg_roles WHERE rolname = 'notifyd'" | grep -q 1 || \
+		docker exec shared-postgres psql -U postgres -c \
+		"CREATE USER notifyd WITH PASSWORD '$(POSTGRES_PASSWORD)';"
+	@docker exec shared-postgres psql -U postgres -c \
+		"SELECT 1 FROM pg_database WHERE datname = 'notifyd'" | grep -q 1 || \
+		docker exec shared-postgres psql -U postgres -c \
+		"CREATE DATABASE notifyd OWNER notifyd;"
+	@echo "Database ready."
+
+deploy: ## Deploy to shared infra (run deploy-db-init first time)
+	$(DEPLOY_COMPOSE) up -d --build
+
+deploy-down: ## Tear down deployed services
+	$(DEPLOY_COMPOSE) down
+
+deploy-logs: ## Tail deployed service logs
+	$(DEPLOY_COMPOSE) logs -f
 
 # ─── Load Testing ────────────────────────────────────────────────────────────
 load-test: ## Run k6 load test (full scenario)
