@@ -10,7 +10,7 @@ services:
     environment:
       DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
       REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: ""
+      REDIS_PASSWORD: "password"
     networks:
       - infra
     restart: always
@@ -34,7 +34,7 @@ services:
     environment:
       DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
       REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: ""
+      REDIS_PASSWORD: "password"
     networks:
       - infra
     restart: always

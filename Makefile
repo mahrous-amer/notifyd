@@ -126,11 +126,12 @@ prod-logs: ## Tail production logs
 DEPLOY_COMPOSE = $(DOCKER_COMPOSE) -f docker-compose.deploy.yml
 
 deploy-db-init: ## Create notifyd user and database on shared Postgres
-	@docker exec shared-postgres psql -U postgres -c \
+	@PG_PASS=$$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2) && \
+	docker exec shared-postgres psql -U postgres -tc \
 		"SELECT 1 FROM pg_roles WHERE rolname = 'notifyd'" | grep -q 1 || \
 		docker exec shared-postgres psql -U postgres -c \
-		"CREATE USER notifyd WITH PASSWORD '$(POSTGRES_PASSWORD)';"
-	@docker exec shared-postgres psql -U postgres -c \
+		"CREATE USER notifyd WITH PASSWORD '$$PG_PASS';"
+	@docker exec shared-postgres psql -U postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname = 'notifyd'" | grep -q 1 || \
 		docker exec shared-postgres psql -U postgres -c \
 		"CREATE DATABASE notifyd OWNER notifyd;"
