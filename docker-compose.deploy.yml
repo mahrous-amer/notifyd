@@ -4,16 +4,22 @@ services:
       context: .
       dockerfile: Dockerfile
       target: api
-    ports:
-      - "${API_PORT:-8080}:8080"
+    expose:
+      - "8080"
     env_file: .env
     environment:
       DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
       REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "password"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
     networks:
       - infra
     restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     deploy:
       resources:
         limits:
@@ -34,10 +40,16 @@ services:
     environment:
       DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
       REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "password"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
     networks:
       - infra
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f worker || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     deploy:
       resources:
         limits:
@@ -57,13 +69,19 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: "postgres://notifyd:${POSTGRES_PASSWORD}@shared-postgres:5432/notifyd?sslmode=disable"
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_ADMIN_CHAT: ${TELEGRAM_ADMIN_CHAT}
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_ADMIN_CHAT: "${TELEGRAM_ADMIN_CHAT}"
     networks:
       - infra
     profiles:
       - admin-bot
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f admin-bot || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     deploy:
       resources:
         limits:

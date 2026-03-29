@@ -103,12 +103,11 @@ func (b *Bot) dispatchUpdate(ctx context.Context, update tgbotapi.Update) {
 func (b *Bot) dispatchMessage(ctx context.Context, msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 
-	if !b.isAuthorized(chatID) {
-		b.sendHTML(chatID, "<b>Unauthorized.</b> This bot is restricted to the configured admin chat.")
-		return
-	}
-
 	if !msg.IsCommand() {
+		if b.isAuthorized(chatID) {
+			return
+		}
+		b.sendHTML(chatID, "<b>Unauthorized.</b> This bot is restricted to the configured admin chat.")
 		return
 	}
 
@@ -121,8 +120,23 @@ func (b *Bot) dispatchMessage(ctx context.Context, msg *tgbotapi.Message) {
 		Str("args", args).
 		Msg("received command")
 
+	// /start is allowed from any user so they can discover their chat ID.
+	if command == "start" {
+		if b.isAuthorized(chatID) {
+			b.handleStart(chatID)
+		} else {
+			b.handlePublicStart(chatID, msg.From)
+		}
+		return
+	}
+
+	if !b.isAuthorized(chatID) {
+		b.sendHTML(chatID, "<b>Unauthorized.</b> This bot is restricted to the configured admin chat.")
+		return
+	}
+
 	switch command {
-	case "start", "help":
+	case "help":
 		b.handleStart(chatID)
 	case "tenants":
 		b.handleTenants(ctx, chatID)

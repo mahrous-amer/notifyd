@@ -15,6 +15,28 @@ func (b *Bot) handleStart(chatID int64) {
 	b.sendHTML(chatID, welcomeMessage)
 }
 
+func (b *Bot) handlePublicStart(chatID int64, user *tgbotapi.User) {
+	name := user.FirstName
+	if user.LastName != "" {
+		name += " " + user.LastName
+	}
+	text := fmt.Sprintf(
+		"Welcome, <b>%s</b>!\n\n"+
+			"Your chat ID is: <code>%d</code>\n\n"+
+			"Share this ID with your admin to receive notifications.",
+		name, chatID,
+	)
+	b.sendHTML(chatID, text)
+	// Notify the admin that a new user started the bot.
+	b.sendHTML(b.adminChatID, fmt.Sprintf(
+		"New user started the bot:\n"+
+			"Name: <b>%s</b>\n"+
+			"Username: @%s\n"+
+			"Chat ID: <code>%d</code>",
+		name, user.UserName, chatID,
+	))
+}
+
 func (b *Bot) handleTenants(ctx context.Context, chatID int64) {
 	tenants, total, err := b.tenantSvc.List(ctx, 50, 0)
 	if err != nil {
