@@ -17,6 +17,18 @@ coverage.html
 .vscode/
 *.swp
 
+# AI assistant artifacts
+.claude/
+.cursor/
+.aider*
+.continue/
+.windsurf/
+.codeium/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.github/copilot-instructions.md
+
 # OS
 .DS_Store
 Thumbs.db
