@@ -1,6 +1,6 @@
 # Notifyd API Documentation
 
-**Base URL:** `https://bse_notify_bot.fluxintek.com`
+**Base URL:** `https://notifyd.fluxintek.com`
 
 ---
 
@@ -460,13 +460,13 @@ All errors follow this format:
 
 ```bash
 # 1. Get token
-TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+TOKEN=$(curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"test-api-key-123","api_secret":"test-secret-12345"}' \
   | jq -r .token)
 
 # 2. Create a Telegram channel config
-curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+curl -s -X POST https://notifyd.fluxintek.com/channels \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -479,7 +479,7 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
   }'
 
 # 3. Send a notification (use channel_config_id from step 2)
-curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
+curl -s -X POST https://notifyd.fluxintek.com/notifications/send \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -489,11 +489,11 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
   }'
 
 # 4. Check delivery status
-curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID \
+curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID \
   -H "Authorization: Bearer $TOKEN"
 
 # 5. View delivery attempts
-curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
+curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -501,13 +501,13 @@ curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/attem
 
 ```bash
 # 1. Get admin token
-ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+ADMIN_TOKEN=$(curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"ADMIN_API_KEY","api_secret":"ADMIN_API_SECRET"}' \
   | jq -r .token)
 
 # 2. Create tenant
-curl -s -X POST https://bse_notify_bot.fluxintek.com/admin/tenants \
+curl -s -X POST https://notifyd.fluxintek.com/admin/tenants \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"name":"Acme Corp","slug":"acme"}'

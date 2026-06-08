@@ -206,7 +206,7 @@ cp .env.example .env
 ### Base URL
 
 ```
-https://bse_notify_bot.fluxintek.com
+https://notifyd.fluxintek.com
 ```
 
 ### Response format
@@ -250,7 +250,7 @@ Exchange an API key and secret for a JWT.
 **Tenant authentication:**
 
 ```bash
-curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"test-api-key-123","api_secret":"test-secret-12345"}'
 ```
@@ -258,7 +258,7 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
 **Admin authentication:**
 
 ```bash
-curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}'
 ```
@@ -289,7 +289,7 @@ Channel configs store the credentials and settings for a specific messaging dest
 List all channel configs for the authenticated tenant.
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/channels \
+curl -s https://notifyd.fluxintek.com/channels \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -299,7 +299,7 @@ Create a new channel config.
 
 ```bash
 # Telegram
-curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+curl -s -X POST https://notifyd.fluxintek.com/channels \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -312,7 +312,7 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
   }'
 
 # Discord
-curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+curl -s -X POST https://notifyd.fluxintek.com/channels \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -324,7 +324,7 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
   }'
 
 # WhatsApp
-curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+curl -s -X POST https://notifyd.fluxintek.com/channels \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -359,7 +359,7 @@ Optional delivery preferences:
 #### GET /channels/{id}
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+curl -s https://notifyd.fluxintek.com/channels/CHANNEL_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -368,7 +368,7 @@ curl -s https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
 Update a channel config (all fields optional):
 
 ```bash
-curl -s -X PATCH https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+curl -s -X PATCH https://notifyd.fluxintek.com/channels/CHANNEL_ID \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"new-name","is_active":false}'
@@ -377,7 +377,7 @@ curl -s -X PATCH https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
 #### DELETE /channels/{id}
 
 ```bash
-curl -s -X DELETE https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
+curl -s -X DELETE https://notifyd.fluxintek.com/channels/CHANNEL_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -390,7 +390,7 @@ curl -s -X DELETE https://bse_notify_bot.fluxintek.com/channels/CHANNEL_ID \
 Send a notification to a single channel.
 
 ```bash
-curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
+curl -s -X POST https://notifyd.fluxintek.com/notifications/send \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -425,7 +425,7 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
 Send to multiple channels in one request (1–50 items):
 
 ```bash
-curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send-multi \
+curl -s -X POST https://notifyd.fluxintek.com/notifications/send-multi \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -458,19 +458,19 @@ List notifications with optional filtering:
 
 ```bash
 # All notifications
-curl -s "https://bse_notify_bot.fluxintek.com/notifications" \
+curl -s "https://notifyd.fluxintek.com/notifications" \
   -H "Authorization: Bearer $TOKEN"
 
 # Filter by status
-curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=delivered&limit=10" \
+curl -s "https://notifyd.fluxintek.com/notifications?status=delivered&limit=10" \
   -H "Authorization: Bearer $TOKEN"
 
 # Filter by channel
-curl -s "https://bse_notify_bot.fluxintek.com/notifications?channel=telegram&offset=20" \
+curl -s "https://notifyd.fluxintek.com/notifications?channel=telegram&offset=20" \
   -H "Authorization: Bearer $TOKEN"
 
 # Combined
-curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=failed&channel=discord&limit=50" \
+curl -s "https://notifyd.fluxintek.com/notifications?status=failed&channel=discord&limit=50" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -484,7 +484,7 @@ curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=failed&channe
 #### GET /notifications/{id}
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID \
+curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -493,7 +493,7 @@ curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID \
 View delivery attempt history:
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
+curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -511,7 +511,7 @@ curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/attem
 #### GET /notifications/{id}/metrics
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/metrics \
+curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID/metrics \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -522,7 +522,7 @@ curl -s https://bse_notify_bot.fluxintek.com/notifications/NOTIFICATION_ID/metri
 Admin endpoints require an admin JWT (obtained with `ADMIN_API_KEY` / `ADMIN_API_SECRET`).
 
 ```bash
-ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+ADMIN_TOKEN=$(curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}' \
   | jq -r .token)
@@ -531,7 +531,7 @@ ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
 #### POST /admin/tenants
 
 ```bash
-curl -s -X POST https://bse_notify_bot.fluxintek.com/admin/tenants \
+curl -s -X POST https://notifyd.fluxintek.com/admin/tenants \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"name":"Acme Corp","slug":"acme"}'
@@ -542,21 +542,21 @@ The response includes `api_key` and `api_secret` — store the secret securely, 
 #### GET /admin/tenants
 
 ```bash
-curl -s "https://bse_notify_bot.fluxintek.com/admin/tenants?limit=20&offset=0" \
+curl -s "https://notifyd.fluxintek.com/admin/tenants?limit=20&offset=0" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 #### GET /admin/tenants/{id}
 
 ```bash
-curl -s https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+curl -s https://notifyd.fluxintek.com/admin/tenants/TENANT_ID \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 #### PATCH /admin/tenants/{id}
 
 ```bash
-curl -s -X PATCH https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+curl -s -X PATCH https://notifyd.fluxintek.com/admin/tenants/TENANT_ID \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"name":"Acme Corporation","is_active":false}'
@@ -565,7 +565,7 @@ curl -s -X PATCH https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
 #### DELETE /admin/tenants/{id}
 
 ```bash
-curl -s -X DELETE https://bse_notify_bot.fluxintek.com/admin/tenants/TENANT_ID \
+curl -s -X DELETE https://notifyd.fluxintek.com/admin/tenants/TENANT_ID \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -577,26 +577,26 @@ Complete workflow from tenant creation to notification delivery:
 
 ```bash
 # 1. Authenticate as admin
-ADMIN_TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+ADMIN_TOKEN=$(curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"<ADMIN_API_KEY>","api_secret":"<ADMIN_API_SECRET>"}' \
   | jq -r .token)
 
 # 2. Create a tenant
-curl -s -X POST https://bse_notify_bot.fluxintek.com/admin/tenants \
+curl -s -X POST https://notifyd.fluxintek.com/admin/tenants \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"name":"Acme Corp","slug":"acme"}'
 # → Save api_key and api_secret from response
 
 # 3. Authenticate as the tenant
-TOKEN=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/auth/token \
+TOKEN=$(curl -s -X POST https://notifyd.fluxintek.com/auth/token \
   -H "Content-Type: application/json" \
   -d '{"api_key":"<tenant_api_key>","api_secret":"<tenant_api_secret>"}' \
   | jq -r .token)
 
 # 4. Create a Telegram channel config
-CHANNEL_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
+CHANNEL_ID=$(curl -s -X POST https://notifyd.fluxintek.com/channels \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -609,7 +609,7 @@ CHANNEL_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/channels \
   }' | jq -r .id)
 
 # 5. Send a notification
-NOTIF_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send \
+NOTIF_ID=$(curl -s -X POST https://notifyd.fluxintek.com/notifications/send \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
@@ -620,16 +620,16 @@ NOTIF_ID=$(curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/se
 
 # 6. Check delivery status (wait a moment for async processing)
 sleep 2
-curl -s https://bse_notify_bot.fluxintek.com/notifications/$NOTIF_ID \
+curl -s https://notifyd.fluxintek.com/notifications/$NOTIF_ID \
   -H "Authorization: Bearer $TOKEN" | jq .status
 # → "delivered"
 
 # 7. View delivery attempts
-curl -s https://bse_notify_bot.fluxintek.com/notifications/$NOTIF_ID/attempts \
+curl -s https://notifyd.fluxintek.com/notifications/$NOTIF_ID/attempts \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # 8. Send to multiple channels at once
-curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send-multi \
+curl -s -X POST https://notifyd.fluxintek.com/notifications/send-multi \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
@@ -640,11 +640,11 @@ curl -s -X POST https://bse_notify_bot.fluxintek.com/notifications/send-multi \
   }"
 
 # 9. List all delivered notifications
-curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=delivered" \
+curl -s "https://notifyd.fluxintek.com/notifications?status=delivered" \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # 10. List failed notifications
-curl -s "https://bse_notify_bot.fluxintek.com/notifications?status=failed" \
+curl -s "https://notifyd.fluxintek.com/notifications?status=failed" \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
