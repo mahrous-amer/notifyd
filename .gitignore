@@ -35,3 +35,6 @@ Thumbs.db
 
 # Go
 vendor/
+
+# Local client demos may hold credentials; never commit.
+clients/csharp/
