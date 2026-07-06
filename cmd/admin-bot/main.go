@@ -44,8 +44,9 @@ func main() {
 	tenantRepo := repository.NewPgTenantRepo(dbPool)
 	notifRepo := repository.NewPgNotificationRepo(dbPool)
 	channelRepo := repository.NewPgChannelConfigRepo(dbPool)
+	apiKeyRepo := repository.NewPgAPIKeyRepo(dbPool)
 
-	tenantSvc := service.NewTenantService(tenantRepo)
+	tenantSvc := service.NewTenantService(tenantRepo, apiKeyRepo)
 	// NotificationService requires an asynq client for Send, but the bot only
 	// calls GetByID, List, and CountByStatus, so we pass nil for both the
 	// entitlement repo and the asynq client — send paths are never exercised

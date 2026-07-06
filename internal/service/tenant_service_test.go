@@ -16,13 +16,14 @@ import (
 	"github.com/bse/notifyd/internal/service"
 )
 
-// buildTenantServiceFixture constructs a TenantService with a mocked repo.
+// buildTenantServiceFixture constructs a TenantService with a mocked tenant
+// repo and an in-memory fake key repo (so Create can write the initial key row).
 func buildTenantServiceFixture(t *testing.T) (*service.TenantService, *mocks.MockTenantRepository) {
 	t.Helper()
 
 	ctrl := gomock.NewController(t)
 	repo := mocks.NewMockTenantRepository(ctrl)
-	svc := service.NewTenantService(repo)
+	svc := service.NewTenantService(repo, &fakeAPIKeyRepo{})
 
 	return svc, repo
 }

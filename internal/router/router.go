@@ -31,6 +31,7 @@ func New(
 	entH *handler.EntitlementHandler,
 	svcHMACSecret string,
 	quotaMW func(http.Handler) http.Handler,
+	apiKeyH *handler.APIKeyHandler,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -54,6 +55,12 @@ func New(
 
 	r.Group(func(r chi.Router) {
 		r.Use(auth.Middleware(jwtMgr))
+
+		r.Route("/keys", func(r chi.Router) {
+			r.Get("/", apiKeyH.List)
+			r.Post("/", apiKeyH.Create)
+			r.Delete("/{keyID}", apiKeyH.Revoke)
+		})
 
 		r.Route("/channels", func(r chi.Router) {
 			r.Get("/", channelH.List)

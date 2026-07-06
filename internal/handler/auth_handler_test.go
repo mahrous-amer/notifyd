@@ -18,42 +18,67 @@ import (
 	"github.com/bse/notifyd/internal/domain"
 )
 
-// stubTenantRepo satisfies domain.TenantRepository using a function field so
+// stubTenantRepo satisfies domain.TenantRepository using function fields so
 // each test can inject its own behaviour without a separate type per test.
 type stubTenantRepo struct {
 	domain.TenantRepository
 	getByAPIKeyFn func(ctx context.Context, apiKey string) (*domain.Tenant, error)
+	getByIDFn     func(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
 }
 
 func (s *stubTenantRepo) GetByAPIKey(ctx context.Context, apiKey string) (*domain.Tenant, error) {
-	return s.getByAPIKeyFn(ctx, apiKey)
+	if s.getByAPIKeyFn != nil {
+		return s.getByAPIKeyFn(ctx, apiKey)
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (s *stubTenantRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Tenant, error) {
+	if s.getByIDFn != nil {
+		return s.getByIDFn(ctx, id)
+	}
+	return nil, domain.ErrNotFound
+}
+
+// stubAPIKeyRepo satisfies domain.APIKeyRepository using a function field so
+// each test can control the key lookup behaviour.
+type stubAPIKeyRepo struct {
+	domain.APIKeyRepository
+	getByAPIKeyFn func(ctx context.Context, apiKey string) (*domain.APIKey, error)
+}
+
+func (s *stubAPIKeyRepo) GetByAPIKey(ctx context.Context, apiKey string) (*domain.APIKey, error) {
+	if s.getByAPIKeyFn != nil {
+		return s.getByAPIKeyFn(ctx, apiKey)
+	}
+	return nil, domain.ErrNotFound
 }
 
 // authHandlerFixture bundles everything a test needs to exercise IssueToken.
 type authHandlerFixture struct {
-	handler        *AuthHandler
-	jwtMgr         *auth.JWTManager
-	hashedSecret   []byte
-	tenantID       uuid.UUID
-	tenantAPIKey   string
+	handler         *AuthHandler
+	jwtMgr          *auth.JWTManager
+	hashedSecret    []byte
+	tenantID        uuid.UUID
+	tenantAPIKey    string
 	tenantRawSecret string
 }
 
-func newAuthHandlerFixture(t *testing.T, repo domain.TenantRepository) *authHandlerFixture {
+func newAuthHandlerFixture(t *testing.T, tenantRepo domain.TenantRepository, keyRepo domain.APIKeyRepository) *authHandlerFixture {
 	t.Helper()
 
 	jwtMgr := auth.NewJWTManager("test-signing-key", "notifyd-test", time.Hour)
-	handler := NewAuthHandler(repo, jwtMgr, "admin-key", "admin-secret")
+	handler := NewAuthHandler(tenantRepo, keyRepo, jwtMgr, "admin-key", "admin-secret")
 
 	hashedSecret, err := bcrypt.GenerateFromPassword([]byte("test-secret"), bcrypt.MinCost)
 	require.NoError(t, err, "bcrypt.GenerateFromPassword must not fail in test setup")
 
 	return &authHandlerFixture{
-		handler:        handler,
-		jwtMgr:         jwtMgr,
-		hashedSecret:   hashedSecret,
-		tenantID:       uuid.New(),
-		tenantAPIKey:   "tenant-api-key",
+		handler:         handler,
+		jwtMgr:          jwtMgr,
+		hashedSecret:    hashedSecret,
+		tenantID:        uuid.New(),
+		tenantAPIKey:    "tenant-api-key",
 		tenantRawSecret: "test-secret",
 	}
 }
@@ -80,18 +105,27 @@ func TestIssueToken_ValidTenantCredentials_Returns200WithToken(t *testing.T) {
 	require.NoError(t, err)
 
 	tenantID := uuid.New()
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
-			return &domain.Tenant{
-				ID:        tenantID,
-				Slug:      "acme",
-				APIKey:    "tenant-api-key",
-				APISecret: string(hashedSecret),
-				IsActive:  true,
+
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
+			return &domain.APIKey{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				APIKey:        "tenant-api-key",
+				APISecretHash: string(hashedSecret),
 			}, nil
 		},
 	}
-	f := newAuthHandlerFixture(t, repo)
+	tenantRepo := &stubTenantRepo{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Tenant, error) {
+			return &domain.Tenant{
+				ID:       tenantID,
+				Slug:     "acme",
+				IsActive: true,
+			}, nil
+		},
+	}
+	f := newAuthHandlerFixture(t, tenantRepo, keyRepo)
 
 	rec := issueTokenRequest(t, f.handler, "tenant-api-key", "test-secret")
 
@@ -104,12 +138,12 @@ func TestIssueToken_ValidTenantCredentials_Returns200WithToken(t *testing.T) {
 }
 
 func TestIssueToken_InvalidAPIKey_Returns401(t *testing.T) {
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
 			return nil, domain.ErrNotFound
 		},
 	}
-	f := newAuthHandlerFixture(t, repo)
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, keyRepo)
 
 	rec := issueTokenRequest(t, f.handler, "wrong-key", "any-secret")
 
@@ -120,17 +154,28 @@ func TestIssueToken_DisabledTenant_Returns403(t *testing.T) {
 	hashedSecret, err := bcrypt.GenerateFromPassword([]byte("test-secret"), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
-			return &domain.Tenant{
-				ID:        uuid.New(),
-				APIKey:    "tenant-api-key",
-				APISecret: string(hashedSecret),
-				IsActive:  false,
+	tenantID := uuid.New()
+
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
+			return &domain.APIKey{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				APIKey:        "tenant-api-key",
+				APISecretHash: string(hashedSecret),
 			}, nil
 		},
 	}
-	f := newAuthHandlerFixture(t, repo)
+	tenantRepo := &stubTenantRepo{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Tenant, error) {
+			return &domain.Tenant{
+				ID:       tenantID,
+				APIKey:   "tenant-api-key",
+				IsActive: false,
+			}, nil
+		},
+	}
+	f := newAuthHandlerFixture(t, tenantRepo, keyRepo)
 
 	rec := issueTokenRequest(t, f.handler, "tenant-api-key", "test-secret")
 
@@ -141,17 +186,27 @@ func TestIssueToken_WrongTenantSecret_Returns401(t *testing.T) {
 	hashedSecret, err := bcrypt.GenerateFromPassword([]byte("correct-secret"), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
-			return &domain.Tenant{
-				ID:        uuid.New(),
-				APIKey:    "tenant-api-key",
-				APISecret: string(hashedSecret),
-				IsActive:  true,
+	tenantID := uuid.New()
+
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
+			return &domain.APIKey{
+				ID:            uuid.New(),
+				TenantID:      tenantID,
+				APIKey:        "tenant-api-key",
+				APISecretHash: string(hashedSecret),
 			}, nil
 		},
 	}
-	f := newAuthHandlerFixture(t, repo)
+	tenantRepo := &stubTenantRepo{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Tenant, error) {
+			return &domain.Tenant{
+				ID:       tenantID,
+				IsActive: true,
+			}, nil
+		},
+	}
+	f := newAuthHandlerFixture(t, tenantRepo, keyRepo)
 
 	rec := issueTokenRequest(t, f.handler, "tenant-api-key", "wrong-secret")
 
@@ -159,14 +214,20 @@ func TestIssueToken_WrongTenantSecret_Returns401(t *testing.T) {
 }
 
 func TestIssueToken_ValidAdminCredentials_Returns200WithAdminToken(t *testing.T) {
-	// The repo should never be called when admin credentials match.
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
+	// Neither repo should be called when admin credentials match.
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
 			t.Fatal("GetByAPIKey must not be called for admin authentication")
 			return nil, nil
 		},
 	}
-	f := newAuthHandlerFixture(t, repo)
+	tenantRepo := &stubTenantRepo{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Tenant, error) {
+			t.Fatal("GetByID must not be called for admin authentication")
+			return nil, nil
+		},
+	}
+	f := newAuthHandlerFixture(t, tenantRepo, keyRepo)
 
 	rec := issueTokenRequest(t, f.handler, "admin-key", "admin-secret")
 
@@ -183,12 +244,7 @@ func TestIssueToken_ValidAdminCredentials_Returns200WithAdminToken(t *testing.T)
 }
 
 func TestIssueToken_WrongAdminSecret_Returns401(t *testing.T) {
-	repo := &stubTenantRepo{
-		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.Tenant, error) {
-			return nil, domain.ErrNotFound
-		},
-	}
-	f := newAuthHandlerFixture(t, repo)
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, &stubAPIKeyRepo{})
 
 	rec := issueTokenRequest(t, f.handler, "admin-key", "not-the-admin-secret")
 
@@ -196,7 +252,7 @@ func TestIssueToken_WrongAdminSecret_Returns401(t *testing.T) {
 }
 
 func TestIssueToken_EmptyBody_Returns400(t *testing.T) {
-	f := newAuthHandlerFixture(t, &stubTenantRepo{})
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, &stubAPIKeyRepo{})
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/token", bytes.NewReader([]byte{}))
 	req.Header.Set("Content-Type", "application/json")
@@ -208,7 +264,7 @@ func TestIssueToken_EmptyBody_Returns400(t *testing.T) {
 }
 
 func TestIssueToken_MissingAPIKey_Returns400(t *testing.T) {
-	f := newAuthHandlerFixture(t, &stubTenantRepo{})
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, &stubAPIKeyRepo{})
 
 	body, err := json.Marshal(map[string]string{"api_secret": "some-secret"})
 	require.NoError(t, err)
@@ -223,7 +279,7 @@ func TestIssueToken_MissingAPIKey_Returns400(t *testing.T) {
 }
 
 func TestIssueToken_MissingAPISecret_Returns400(t *testing.T) {
-	f := newAuthHandlerFixture(t, &stubTenantRepo{})
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, &stubAPIKeyRepo{})
 
 	body, err := json.Marshal(map[string]string{"api_key": "some-key"})
 	require.NoError(t, err)

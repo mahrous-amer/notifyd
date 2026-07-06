@@ -88,10 +88,12 @@ func main() {
 	registry.Register(provider.NewWhatsAppProvider(httpClient))
 
 	entRepo := repository.NewPgEntitlementRepo(dbPool)
+	apiKeyRepo := repository.NewPgAPIKeyRepo(dbPool)
 
-	tenantSvc := service.NewTenantService(tenantRepo)
+	tenantSvc := service.NewTenantService(tenantRepo, apiKeyRepo)
 	channelSvc := service.NewChannelService(channelRepo, entRepo, registry, logger)
 	notifSvc := service.NewNotificationService(notifRepo, channelRepo, entRepo, asynqClient, cfg.MaxRetries, logger)
+	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, entRepo)
 	entH := handler.NewEntitlementHandler(entRepo, notifRepo)
 
 	quotaSvc := quota.NewService(redisCli, entRepo, cfg.BillingWebhookURL, httpClient, logger)
@@ -100,10 +102,11 @@ func main() {
 	tenantH := handler.NewTenantHandler(tenantSvc)
 	channelH := handler.NewChannelHandler(channelSvc)
 	notifH := handler.NewNotificationHandler(notifSvc, attemptRepo, metricRepo)
-	authH := handler.NewAuthHandler(tenantRepo, jwtMgr, cfg.AdminAPIKey, cfg.AdminAPISecret)
+	apiKeyH := handler.NewAPIKeyHandler(apiKeySvc)
+	authH := handler.NewAuthHandler(tenantRepo, apiKeyRepo, jwtMgr, cfg.AdminAPIKey, cfg.AdminAPISecret)
 	healthH := handler.NewHealthHandler(dbPool, redisCli)
 
-	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret, quotaMW)
+	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret, quotaMW, apiKeyH)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.APIPort),

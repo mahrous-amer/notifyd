@@ -14,11 +14,12 @@ import (
 )
 
 type TenantService struct {
-	repo domain.TenantRepository
+	repo    domain.TenantRepository
+	keyRepo domain.APIKeyRepository
 }
 
-func NewTenantService(repo domain.TenantRepository) *TenantService {
-	return &TenantService{repo: repo}
+func NewTenantService(repo domain.TenantRepository, keyRepo domain.APIKeyRepository) *TenantService {
+	return &TenantService{repo: repo, keyRepo: keyRepo}
 }
 
 type CreateTenantResult struct {
@@ -61,6 +62,20 @@ func (s *TenantService) Create(ctx context.Context, input domain.CreateTenantInp
 	}
 
 	if err := s.repo.Create(ctx, tenant); err != nil {
+		return nil, err
+	}
+
+	// Write the tenant's initial key row so auth lookup works via api_keys.
+	// The tenants.api_key / api_secret columns keep the same values for
+	// backward compatibility; auth no longer reads from there.
+	if err := s.keyRepo.Create(ctx, &domain.APIKey{
+		ID:            uuid.New(),
+		TenantID:      tenant.ID,
+		APIKey:        apiKey,
+		APISecretHash: string(hashedSecret),
+		Label:         "default",
+		CreatedAt:     now,
+	}); err != nil {
 		return nil, err
 	}
 
