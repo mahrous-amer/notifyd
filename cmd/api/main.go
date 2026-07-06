@@ -18,6 +18,7 @@ import (
 	"github.com/bse/notifyd/internal/config"
 	"github.com/bse/notifyd/internal/handler"
 	"github.com/bse/notifyd/internal/provider"
+	"github.com/bse/notifyd/internal/quota"
 	"github.com/bse/notifyd/internal/repository"
 	"github.com/bse/notifyd/internal/router"
 	"github.com/bse/notifyd/internal/service"
@@ -93,13 +94,16 @@ func main() {
 	entRepo := repository.NewPgEntitlementRepo(dbPool)
 	entH := handler.NewEntitlementHandler(entRepo, notifRepo)
 
+	quotaSvc := quota.NewService(redisCli, entRepo, cfg.BillingWebhookURL, httpClient, logger)
+	quotaMW := quota.Middleware(quotaSvc, cfg.UpgradeURL)
+
 	tenantH := handler.NewTenantHandler(tenantSvc)
 	channelH := handler.NewChannelHandler(channelSvc)
 	notifH := handler.NewNotificationHandler(notifSvc, attemptRepo, metricRepo)
 	authH := handler.NewAuthHandler(tenantRepo, jwtMgr, cfg.AdminAPIKey, cfg.AdminAPISecret)
 	healthH := handler.NewHealthHandler(dbPool, redisCli)
 
-	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret)
+	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret, quotaMW)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.APIPort),

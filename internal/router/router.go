@@ -30,6 +30,7 @@ func New(
 	healthH *handler.HealthHandler,
 	entH *handler.EntitlementHandler,
 	svcHMACSecret string,
+	quotaMW func(http.Handler) http.Handler,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -65,8 +66,8 @@ func New(
 		})
 
 		r.Route("/notifications", func(r chi.Router) {
-			r.Post("/send", notifH.Send)
-			r.Post("/send-multi", notifH.SendMulti)
+			r.With(quotaMW).Post("/send", notifH.Send)
+			r.With(quotaMW).Post("/send-multi", notifH.SendMulti)
 			r.Get("/", notifH.List)
 			r.Route("/{notificationID}", func(r chi.Router) {
 				r.Get("/", notifH.GetByID)
