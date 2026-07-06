@@ -39,6 +39,10 @@ type Config struct {
 
 	AdminAPIKey    string `env:"ADMIN_API_KEY" envDefault:""`
 	AdminAPISecret string `env:"ADMIN_API_SECRET" envDefault:""`
+
+	ServiceHMACSecret string `env:"SERVICE_HMAC_SECRET" envDefault:""`
+	BillingWebhookURL string `env:"BILLING_WEBHOOK_URL" envDefault:""`
+	UpgradeURL        string `env:"UPGRADE_URL" envDefault:"https://portal.fluxintek.com/billing"`
 }
 
 func Load() (*Config, error) {
