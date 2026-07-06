@@ -27,9 +27,6 @@ func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input d
 	if !domain.IsValidChannelType(input.Channel) {
 		return nil, fmt.Errorf("%w: invalid channel type: %s", domain.ErrValidationFailed, input.Channel)
 	}
-	if input.Name == "" {
-		return nil, fmt.Errorf("%w: name is required", domain.ErrValidationFailed)
-	}
 
 	ent, err := domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
 	if err != nil {
@@ -37,6 +34,10 @@ func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input d
 	}
 	if !ent.AllowsChannel(input.Channel) {
 		return nil, fmt.Errorf("%w: %s", domain.ErrChannelNotInPlan, input.Channel)
+	}
+
+	if input.Name == "" {
+		return nil, fmt.Errorf("%w: name is required", domain.ErrValidationFailed)
 	}
 
 	prov, err := s.registry.Get(string(input.Channel))
