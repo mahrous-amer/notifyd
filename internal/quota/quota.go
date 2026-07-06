@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -49,7 +50,7 @@ func (s *Service) EntitlementsFor(ctx context.Context, tenantID uuid.UUID) (*dom
 	if err == nil {
 		return ent, nil
 	}
-	if err != domain.ErrNotFound {
+	if !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -85,7 +86,9 @@ func (s *Service) Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*De
 		return nil, err
 	}
 	if used == n { // first write for this period
-		s.rdb.Expire(ctx, key, counterTTL)
+		if err := s.rdb.Expire(ctx, key, counterTTL).Err(); err != nil {
+			s.logger.Error().Err(err).Str("tenant", tenantID.String()).Msg("failed to set usage key TTL")
+		}
 	}
 
 	if used > ent.MessageLimit {
