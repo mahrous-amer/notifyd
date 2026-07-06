@@ -28,6 +28,8 @@ func New(
 	notifH *handler.NotificationHandler,
 	authH *handler.AuthHandler,
 	healthH *handler.HealthHandler,
+	entH *handler.EntitlementHandler,
+	svcHMACSecret string,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -75,16 +77,24 @@ func New(
 	})
 
 	r.Route("/admin", func(r chi.Router) {
-		r.Use(auth.Middleware(jwtMgr))
-		r.Use(auth.AdminMiddleware())
-		r.Route("/tenants", func(r chi.Router) {
-			r.Get("/", tenantH.List)
-			r.Post("/", tenantH.Create)
-			r.Route("/{tenantID}", func(r chi.Router) {
-				r.Get("/", tenantH.GetByID)
-				r.Patch("/", tenantH.Update)
-				r.Delete("/", tenantH.Delete)
+		r.Group(func(r chi.Router) {
+			r.Use(auth.Middleware(jwtMgr))
+			r.Use(auth.AdminMiddleware())
+			r.Route("/tenants", func(r chi.Router) {
+				r.Get("/", tenantH.List)
+				r.Post("/", tenantH.Create)
+				r.Route("/{tenantID}", func(r chi.Router) {
+					r.Get("/", tenantH.GetByID)
+					r.Patch("/", tenantH.Update)
+					r.Delete("/", tenantH.Delete)
+				})
 			})
+		})
+		// Service-to-service routes (billing -> notifyd), HMAC-authenticated.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.HMACMiddleware(svcHMACSecret))
+			r.Put("/tenants/{tenantID}/entitlements", entH.Put)
+			r.Get("/tenants/{tenantID}/usage", entH.Usage)
 		})
 	})
 

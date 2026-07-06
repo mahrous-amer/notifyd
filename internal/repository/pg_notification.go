@@ -169,6 +169,41 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 	return notifications, total, nil
 }
 
+func (r *PgNotificationRepo) UsageByTenant(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (*domain.UsageReport, error) {
+	report := &domain.UsageReport{ByChannel: map[string]int64{}}
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE n.status = 'delivered'),
+		       COUNT(*) FILTER (WHERE n.status = 'failed')
+		FROM notifications n
+		WHERE n.tenant_id = $1 AND n.created_at >= $2 AND n.created_at < $3`,
+		tenantID, from, to).Scan(&report.Sent, &report.Delivered, &report.Failed)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT c.channel, COUNT(*)
+		FROM notifications n
+		JOIN channel_configs c ON c.id = n.channel_config_id
+		WHERE n.tenant_id = $1 AND n.created_at >= $2 AND n.created_at < $3
+		GROUP BY c.channel`, tenantID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channel string
+		var count int64
+		if err := rows.Scan(&channel, &count); err != nil {
+			return nil, err
+		}
+		report.ByChannel[channel] = count
+	}
+	return report, rows.Err()
+}
+
 // CountByStatus returns a map of notification status to count across all tenants.
 // It issues a single aggregation query rather than N per-tenant queries.
 func (r *PgNotificationRepo) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {

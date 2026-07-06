@@ -74,4 +74,12 @@ type NotificationRepository interface {
 	IncrementRetry(ctx context.Context, id uuid.UUID, lastError string) error
 	List(ctx context.Context, filter NotificationFilter) ([]*Notification, int, error)
 	CountByStatus(ctx context.Context) (map[NotificationStatus]int, error)
+	UsageByTenant(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (*UsageReport, error)
+}
+
+type UsageReport struct {
+	Sent      int64            `json:"sent"`
+	Delivered int64            `json:"delivered"`
+	Failed    int64            `json:"failed"`
+	ByChannel map[string]int64 `json:"by_channel"`
 }

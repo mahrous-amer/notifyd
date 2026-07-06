@@ -90,13 +90,16 @@ func main() {
 	channelSvc := service.NewChannelService(channelRepo, registry, logger)
 	notifSvc := service.NewNotificationService(notifRepo, channelRepo, asynqClient, cfg.MaxRetries, logger)
 
+	entRepo := repository.NewPgEntitlementRepo(dbPool)
+	entH := handler.NewEntitlementHandler(entRepo, notifRepo)
+
 	tenantH := handler.NewTenantHandler(tenantSvc)
 	channelH := handler.NewChannelHandler(channelSvc)
 	notifH := handler.NewNotificationHandler(notifSvc, attemptRepo, metricRepo)
 	authH := handler.NewAuthHandler(tenantRepo, jwtMgr, cfg.AdminAPIKey, cfg.AdminAPISecret)
 	healthH := handler.NewHealthHandler(dbPool, redisCli)
 
-	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH)
+	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.APIPort),
