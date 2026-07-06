@@ -72,5 +72,5 @@ func TestReserve_DefaultsToFreePlanWhenNoEntitlements(t *testing.T) {
 	d, err := svc.Reserve(context.Background(), uuid.New(), 1)
 	require.NoError(t, err)
 	assert.True(t, d.Allowed)
-	assert.Equal(t, FreeMessageLimit, d.Limit)
+	assert.Equal(t, int64(1000), d.Limit)
 }

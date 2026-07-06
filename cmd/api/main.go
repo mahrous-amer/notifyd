@@ -87,11 +87,11 @@ func main() {
 	registry.Register(provider.NewTelegramProvider(httpClient))
 	registry.Register(provider.NewWhatsAppProvider(httpClient))
 
-	tenantSvc := service.NewTenantService(tenantRepo)
-	channelSvc := service.NewChannelService(channelRepo, registry, logger)
-	notifSvc := service.NewNotificationService(notifRepo, channelRepo, asynqClient, cfg.MaxRetries, logger)
-
 	entRepo := repository.NewPgEntitlementRepo(dbPool)
+
+	tenantSvc := service.NewTenantService(tenantRepo)
+	channelSvc := service.NewChannelService(channelRepo, entRepo, registry, logger)
+	notifSvc := service.NewNotificationService(notifRepo, channelRepo, entRepo, asynqClient, cfg.MaxRetries, logger)
 	entH := handler.NewEntitlementHandler(entRepo, notifRepo)
 
 	quotaSvc := quota.NewService(redisCli, entRepo, cfg.BillingWebhookURL, httpClient, logger)

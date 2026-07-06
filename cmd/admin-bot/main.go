@@ -47,10 +47,11 @@ func main() {
 
 	tenantSvc := service.NewTenantService(tenantRepo)
 	// NotificationService requires an asynq client for Send, but the bot only
-	// calls GetByID, List, and CountByStatus, so we pass nil — send paths are
-	// never exercised by the admin bot. If Send were ever called, it would
-	// panic, surfacing the misconfiguration immediately rather than silently failing.
-	notifSvc := service.NewNotificationService(notifRepo, channelRepo, nil, cfg.MaxRetries, logger)
+	// calls GetByID, List, and CountByStatus, so we pass nil for both the
+	// entitlement repo and the asynq client — send paths are never exercised
+	// by the admin bot. If Send were ever called, it would panic, surfacing the
+	// misconfiguration immediately rather than silently failing.
+	notifSvc := service.NewNotificationService(notifRepo, channelRepo, nil, nil, cfg.MaxRetries, logger)
 
 	adminBot, err := bot.New(bot.BotConfig{
 		Token:       cfg.TelegramBotToken,

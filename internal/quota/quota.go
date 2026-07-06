@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,13 +13,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/bse/notifyd/internal/domain"
-)
-
-// Free-plan defaults applied to tenants that have no entitlements row yet
-// (e.g. tenants created before billing existed).
-var (
-	FreeMessageLimit int64 = 1000
-	FreeChannels           = []domain.ChannelType{domain.ChannelDiscord, domain.ChannelTelegram}
 )
 
 const counterTTL = 45 * 24 * time.Hour // outlives any billing period; reconciled nightly
@@ -46,25 +38,7 @@ func NewService(rdb *redis.Client, entRepo domain.EntitlementRepository, webhook
 // EntitlementsFor returns the tenant's entitlements, falling back to
 // Free-plan defaults with a calendar-month period when no row exists.
 func (s *Service) EntitlementsFor(ctx context.Context, tenantID uuid.UUID) (*domain.Entitlements, error) {
-	ent, err := s.entRepo.GetByTenantID(ctx, tenantID)
-	if err == nil {
-		return ent, nil
-	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	return &domain.Entitlements{
-		TenantID:        tenantID,
-		PlanCode:        "free",
-		MessageLimit:    FreeMessageLimit,
-		AllowedChannels: FreeChannels,
-		APIKeyLimit:     1,
-		RetentionDays:   7,
-		PeriodStart:     start,
-		PeriodEnd:       start.AddDate(0, 1, 0),
-	}, nil
+	return domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
 }
 
 func usageKey(tenantID uuid.UUID, periodStart time.Time) string {

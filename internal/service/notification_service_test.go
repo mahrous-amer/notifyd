@@ -42,7 +42,7 @@ func buildNotificationServiceFixture(t *testing.T) notificationServiceFixture {
 	t.Cleanup(func() { _ = asynqClient.Close() })
 
 	logger := zerolog.Nop()
-	svc := service.NewNotificationService(notifRepo, channelRepo, asynqClient, 3, logger)
+	svc := service.NewNotificationService(notifRepo, channelRepo, &fakeEntitlementRepo{}, asynqClient, 3, logger)
 
 	return notificationServiceFixture{
 		svc:         svc,
