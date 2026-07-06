@@ -59,3 +59,14 @@ func TestHMACMiddleware_NoSecretFailsClosed(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
+
+func TestHMACMiddleware_MissingHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPut, "/x", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	HMACMiddleware("s3cret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	})).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
