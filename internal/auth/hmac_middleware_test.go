@@ -149,3 +149,26 @@ func TestHMACMiddleware_TamperedQuery(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+func TestHMACMiddleware_FractionalSecondTimestamp(t *testing.T) {
+	var gotBody string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Create a timestamp with fractional seconds (millisecond precision) using RFC3339Nano
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+	body := `{"plan_code":"pro"}`
+	req := httptest.NewRequest(http.MethodPut, "/x", strings.NewReader(body))
+	req.Header.Set("X-Service-Timestamp", ts)
+	req.Header.Set("X-Service-Signature", sign(http.MethodPut, "/x", ts, body, "s3cret"))
+	rec := httptest.NewRecorder()
+
+	HMACMiddleware("s3cret")(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, body, gotBody, "body must be restored for the handler")
+}

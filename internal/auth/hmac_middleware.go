@@ -50,7 +50,7 @@ func HMACMiddleware(secret string) func(http.Handler) http.Handler {
 				response.Error(w, http.StatusUnauthorized, "invalid credentials")
 				return
 			}
-			ts, err := time.Parse(time.RFC3339, tsHeader)
+			ts, err := time.Parse(time.RFC3339Nano, tsHeader)
 			if err != nil {
 				response.Error(w, http.StatusUnauthorized, "invalid credentials")
 				return
