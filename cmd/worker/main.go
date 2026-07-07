@@ -11,6 +11,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
 	"github.com/bse/notifyd/internal/config"
@@ -52,6 +53,16 @@ func main() {
 	var attemptRepo domain.DeliveryAttemptRepository = repository.NewPgDeliveryAttemptRepo(dbPool)
 	var channelRepo domain.ChannelConfigRepository = repository.NewPgChannelConfigRepo(dbPool)
 	var metricRepo domain.DeliveryMetricRepository = repository.NewPgDeliveryMetricRepo(dbPool)
+
+	tenantRepo := repository.NewPgTenantRepo(dbPool)
+	entRepo := repository.NewPgEntitlementRepo(dbPool)
+	redisCli := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	defer redisCli.Close() //nolint:errcheck
+	maintenance := worker.NewMaintenanceHandler(tenantRepo, entRepo, notifRepo, notifRepo, redisCli, logger)
 
 	httpTransport := &http.Transport{
 		MaxIdleConns:        100,
@@ -100,6 +111,24 @@ func main() {
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeNotificationDeliver, dispatcher.HandleNotificationDeliver)
+	mux.HandleFunc(worker.TypeRetentionPurge, maintenance.HandleRetentionPurge)
+	mux.HandleFunc(worker.TypeUsageReconcile, maintenance.HandleUsageReconcile)
+
+	scheduler := asynq.NewScheduler(
+		asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB},
+		&asynq.SchedulerOpts{Location: time.UTC},
+	)
+	if _, err := scheduler.Register("0 3 * * *", asynq.NewTask(worker.TypeRetentionPurge, nil)); err != nil {
+		logger.Fatal().Err(err).Msg("failed to register retention purge schedule")
+	}
+	if _, err := scheduler.Register("30 3 * * *", asynq.NewTask(worker.TypeUsageReconcile, nil)); err != nil {
+		logger.Fatal().Err(err).Msg("failed to register usage reconcile schedule")
+	}
+	go func() {
+		if err := scheduler.Run(); err != nil {
+			logger.Error().Err(err).Msg("scheduler stopped")
+		}
+	}()
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)

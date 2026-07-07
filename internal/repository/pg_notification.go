@@ -204,6 +204,35 @@ func (r *PgNotificationRepo) UsageByTenant(ctx context.Context, tenantID uuid.UU
 	return report, rows.Err()
 }
 
+// DeleteOlderThan removes notifications and their associated delivery records
+// for a given tenant that were created before the cutoff time. Child rows in
+// delivery_attempts and delivery_metrics are deleted first so this works
+// regardless of FK cascade settings on the older migrations.
+func (r *PgNotificationRepo) DeleteOlderThan(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM delivery_attempts WHERE notification_id IN
+			(SELECT id FROM notifications WHERE tenant_id = $1 AND created_at < $2)`, tenantID, cutoff); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM delivery_metrics WHERE notification_id IN
+			(SELECT id FROM notifications WHERE tenant_id = $1 AND created_at < $2)`, tenantID, cutoff); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM notifications WHERE tenant_id = $1 AND created_at < $2`, tenantID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), tx.Commit(ctx)
+}
+
 // CountByStatus returns a map of notification status to count across all tenants.
 // It issues a single aggregation query rather than N per-tenant queries.
 func (r *PgNotificationRepo) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {

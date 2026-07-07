@@ -43,6 +43,21 @@ func (m *MockNotificationRepository) EXPECT() *MockNotificationRepositoryMockRec
 	return m.recorder
 }
 
+// DeleteOlderThan mocks base method.
+func (m *MockNotificationRepository) DeleteOlderThan(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteOlderThan", ctx, tenantID, cutoff)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteOlderThan indicates an expected call of DeleteOlderThan.
+func (mr *MockNotificationRepositoryMockRecorder) DeleteOlderThan(ctx, tenantID, cutoff any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteOlderThan", reflect.TypeOf((*MockNotificationRepository)(nil).DeleteOlderThan), ctx, tenantID, cutoff)
+}
+
 // CountByStatus mocks base method.
 func (m *MockNotificationRepository) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {
 	m.ctrl.T.Helper()

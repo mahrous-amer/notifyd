@@ -75,6 +75,7 @@ type NotificationRepository interface {
 	List(ctx context.Context, filter NotificationFilter) ([]*Notification, int, error)
 	CountByStatus(ctx context.Context) (map[NotificationStatus]int, error)
 	UsageByTenant(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (*UsageReport, error)
+	DeleteOlderThan(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) (int64, error)
 }
 
 type UsageReport struct {
