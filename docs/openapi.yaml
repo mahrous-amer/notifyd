@@ -278,6 +278,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "402":
+          description: Tenant's billing period has lapsed and no renewal has been pushed yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionExpiredError"
         "429":
           description: Tenant message quota exhausted.
           content:
@@ -317,6 +323,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "402":
+          description: Tenant's billing period has lapsed and no renewal has been pushed yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionExpiredError"
         "429":
           description: Tenant message quota exhausted.
           content:
@@ -1417,3 +1429,15 @@ components:
           type: string
           format: uri
           description: URL where the tenant can upgrade their plan.
+
+    SubscriptionExpiredError:
+      type: object
+      properties:
+        error:
+          type: string
+          enum:
+            - SUBSCRIPTION_PERIOD_EXPIRED
+        renew_url:
+          type: string
+          format: uri
+          description: URL where the tenant can renew or upgrade their subscription.

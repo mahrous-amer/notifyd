@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,10 @@ import (
 
 	"github.com/bse/notifyd/internal/domain"
 )
+
+// ErrPeriodExpired is returned by Reserve when the tenant's billing period has
+// ended and no renewal has been pushed yet. The counter is never touched.
+var ErrPeriodExpired = errors.New("subscription period expired")
 
 const counterTTL = 45 * 24 * time.Hour // outlives any billing period; reconciled nightly
 
@@ -53,6 +58,9 @@ func (s *Service) Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*De
 	if err != nil {
 		return nil, err
 	}
+	if time.Now().After(ent.PeriodEnd) {
+		return nil, ErrPeriodExpired
+	}
 	key := usageKey(tenantID, ent.PeriodStart)
 
 	used, err := s.rdb.IncrBy(ctx, key, n).Result()
@@ -91,18 +99,18 @@ func (s *Service) Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*De
 func (s *Service) Refund(ctx context.Context, tenantID uuid.UUID, n int64) error {
 	ent, err := s.EntitlementsFor(ctx, tenantID)
 	if err != nil {
-		s.logger.Debug().Err(err).Msg("quota refund: failed to resolve entitlements")
+		s.logger.Warn().Err(err).Msg("quota refund: failed to resolve entitlements")
 		return err
 	}
 	key := usageKey(tenantID, ent.PeriodStart)
 	newVal, err := s.rdb.DecrBy(ctx, key, n).Result()
 	if err != nil {
-		s.logger.Debug().Err(err).Str("key", key).Msg("quota refund: DecrBy failed")
+		s.logger.Warn().Err(err).Str("key", key).Msg("quota refund: DecrBy failed")
 		return err
 	}
 	if newVal < 0 {
-		// Guard against underflow (e.g. concurrent refunds or counter drift)
-		s.rdb.Set(ctx, key, 0, 0) //nolint:errcheck
+		// Correct overshoot with IncrBy rather than Set so the key TTL is preserved.
+		s.rdb.IncrBy(ctx, key, -newVal) //nolint:errcheck
 	}
 	return nil
 }

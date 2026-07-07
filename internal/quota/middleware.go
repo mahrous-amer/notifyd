@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -22,13 +23,19 @@ type ReserverRefunder interface {
 
 // statusRecorder wraps http.ResponseWriter and captures the HTTP status code
 // written by the downstream handler (defaults to 200 if WriteHeader is never
-// called).
+// called). wroteHeader guards against double-WriteHeader, matching Go's
+// transport behavior and preventing a spurious refund on repeated calls.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (sr *statusRecorder) WriteHeader(code int) {
+	if sr.wroteHeader {
+		return
+	}
+	sr.wroteHeader = true
 	sr.status = code
 	sr.ResponseWriter.WriteHeader(code)
 }
@@ -64,6 +71,13 @@ func Middleware(svc ReserverRefunder, upgradeURL string) func(http.Handler) http
 
 			decision, err := svc.Reserve(ctx, claims.TenantID, n)
 			if err != nil {
+				if errors.Is(err, ErrPeriodExpired) {
+					response.JSON(w, http.StatusPaymentRequired, map[string]string{
+						"error":    "SUBSCRIPTION_PERIOD_EXPIRED",
+						"renew_url": upgradeURL,
+					})
+					return
+				}
 				response.Error(w, http.StatusInternalServerError, "internal server error")
 				return
 			}

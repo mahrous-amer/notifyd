@@ -74,3 +74,44 @@ func TestReserve_DefaultsToFreePlanWhenNoEntitlements(t *testing.T) {
 	assert.True(t, d.Allowed)
 	assert.Equal(t, int64(1000), d.Limit)
 }
+
+func TestReserve_RejectsWhenPeriodExpired(t *testing.T) {
+	rdb := testRedis(t)
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+
+	tenantID := uuid.New()
+	expiredEnt := &domain.Entitlements{
+		MessageLimit: 1000,
+		PeriodStart:  time.Now().Add(-48 * time.Hour),
+		PeriodEnd:    time.Now().Add(-1 * time.Second), // period has lapsed
+	}
+	svc := NewService(rdb, &stubEntRepo{ent: expiredEnt}, "", &http.Client{}, zerolog.Nop())
+
+	d, err := svc.Reserve(context.Background(), tenantID, 1)
+
+	assert.ErrorIs(t, err, ErrPeriodExpired, "Reserve must return ErrPeriodExpired for an expired period")
+	assert.Nil(t, d, "Decision must be nil when period is expired")
+
+	// The Redis counter must not have been touched.
+	key := usageKey(tenantID, expiredEnt.PeriodStart)
+	exists, redisErr := rdb.Exists(context.Background(), key).Result()
+	require.NoError(t, redisErr)
+	assert.Equal(t, int64(0), exists, "Redis usage key must not be created when the period is expired")
+}
+
+func TestReserve_AllowsWhenPeriodIsActive(t *testing.T) {
+	rdb := testRedis(t)
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+
+	ent := &domain.Entitlements{
+		MessageLimit: 100,
+		PeriodStart:  time.Now().Add(-time.Hour),
+		PeriodEnd:    time.Now().Add(30 * 24 * time.Hour), // valid future period
+	}
+	svc := NewService(rdb, &stubEntRepo{ent: ent}, "", &http.Client{}, zerolog.Nop())
+
+	d, err := svc.Reserve(context.Background(), uuid.New(), 1)
+	require.NoError(t, err)
+	assert.True(t, d.Allowed)
+	assert.Equal(t, int64(1), d.Used)
+}

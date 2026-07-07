@@ -15,13 +15,14 @@ import (
 
 type stubReserver struct {
 	decision    *Decision
+	err         error
 	gotN        int64
 	refundCalls []int64
 }
 
 func (s *stubReserver) Reserve(_ context.Context, _ uuid.UUID, n int64) (*Decision, error) {
 	s.gotN = n
-	return s.decision, nil
+	return s.decision, s.err
 }
 
 func (s *stubReserver) Refund(_ context.Context, _ uuid.UUID, n int64) error {
@@ -110,6 +111,23 @@ func TestQuotaMiddleware_NoRefund_On2xx(t *testing.T) {
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 	assert.Empty(t, res.refundCalls, "Refund must NOT be called on 2xx")
+}
+
+// TestQuotaMiddleware_RejectsWith402OnExpiredPeriod verifies that when Reserve
+// returns ErrPeriodExpired the middleware responds 402 with the SUBSCRIPTION_PERIOD_EXPIRED
+// error code and the renew URL, and does NOT call the downstream handler.
+func TestQuotaMiddleware_RejectsWith402OnExpiredPeriod(t *testing.T) {
+	res := &stubReserver{err: ErrPeriodExpired}
+	req := withClaims(httptest.NewRequest(http.MethodPost, "/notifications/send", strings.NewReader(`{}`)))
+	rec := httptest.NewRecorder()
+
+	Middleware(res, "https://portal.fluxintek.com/billing")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called when period is expired")
+	})).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusPaymentRequired, rec.Code)
+	assert.Contains(t, rec.Body.String(), "SUBSCRIPTION_PERIOD_EXPIRED")
+	assert.Contains(t, rec.Body.String(), "https://portal.fluxintek.com/billing")
 }
 
 // TestQuotaMiddleware_Refund_SendMulti_On4xx verifies that a send-multi
