@@ -39,7 +39,7 @@ func testRedis(t *testing.T) *redis.Client {
 
 func TestReserve_AllowsUnderLimit_RejectsOver(t *testing.T) {
 	rdb := testRedis(t)
-	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); _ = rdb.Close() })
 
 	ent := &domain.Entitlements{
 		MessageLimit: 2,
@@ -66,7 +66,7 @@ func TestReserve_AllowsUnderLimit_RejectsOver(t *testing.T) {
 
 func TestReserve_DefaultsToFreePlanWhenNoEntitlements(t *testing.T) {
 	rdb := testRedis(t)
-	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); _ = rdb.Close() })
 
 	svc := NewService(rdb, &stubEntRepo{}, "", &http.Client{}, zerolog.Nop())
 	d, err := svc.Reserve(context.Background(), uuid.New(), 1)
@@ -77,7 +77,7 @@ func TestReserve_DefaultsToFreePlanWhenNoEntitlements(t *testing.T) {
 
 func TestReserve_RejectsWhenPeriodExpired(t *testing.T) {
 	rdb := testRedis(t)
-	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); _ = rdb.Close() })
 
 	tenantID := uuid.New()
 	expiredEnt := &domain.Entitlements{
@@ -101,7 +101,7 @@ func TestReserve_RejectsWhenPeriodExpired(t *testing.T) {
 
 func TestReserve_RejectsExactlyAtPeriodEnd(t *testing.T) {
 	rdb := testRedis(t)
-	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); _ = rdb.Close() })
 
 	tenantID := uuid.New()
 	// PeriodEnd is now: the half-open interval [start, end) excludes this instant,
@@ -125,7 +125,7 @@ func TestReserve_RejectsExactlyAtPeriodEnd(t *testing.T) {
 
 func TestReserve_AllowsWhenPeriodIsActive(t *testing.T) {
 	rdb := testRedis(t)
-	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); _ = rdb.Close() })
 
 	ent := &domain.Entitlements{
 		MessageLimit: 100,

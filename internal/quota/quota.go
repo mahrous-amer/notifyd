@@ -127,10 +127,12 @@ func (s *Service) notifyThreshold(tenantID uuid.UUID, ent *domain.Entitlements, 
 	if s.webhookURL == "" {
 		return
 	}
-	// Dedup: only the first crossing per threshold per period fires.
+	// Dedup: only the first crossing per threshold per period fires. SET NX
+	// returns redis.Nil when the key already exists (already alerted); any
+	// non-nil error means either "already alerted" or a real failure, and in
+	// both cases we skip firing, so only a newly-set key (err == nil) proceeds.
 	dedupKey := fmt.Sprintf("quota-alert:%s:%d:%d", tenantID, ent.PeriodStart.Unix(), pct)
-	ok, err := s.rdb.SetNX(context.Background(), dedupKey, 1, counterTTL).Result()
-	if err != nil || !ok {
+	if err := s.rdb.SetArgs(context.Background(), dedupKey, 1, redis.SetArgs{Mode: "NX", TTL: counterTTL}).Err(); err != nil {
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{
