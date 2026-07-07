@@ -28,6 +28,7 @@ func NewEntitlementHandler(entRepo domain.EntitlementRepository, usage UsageQuer
 }
 
 type putEntitlementsRequest struct {
+	TenantID        uuid.UUID `json:"tenant_id"`
 	PlanCode        string    `json:"plan_code"`
 	MessageLimit    int64     `json:"message_limit"`
 	AllowedChannels []string  `json:"allowed_channels"`
@@ -49,6 +50,13 @@ func (h *EntitlementHandler) Put(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Defense in depth: require the body tenant_id to match the path parameter.
+	if req.TenantID == uuid.Nil || req.TenantID != tenantID {
+		response.Error(w, http.StatusBadRequest, "validation failed")
+		return
+	}
+
 	if req.PlanCode == "" || req.MessageLimit < 0 || req.APIKeyLimit < 1 || req.RetentionDays < 1 ||
 		!req.PeriodEnd.After(req.PeriodStart) {
 		response.Error(w, http.StatusBadRequest, "validation failed")

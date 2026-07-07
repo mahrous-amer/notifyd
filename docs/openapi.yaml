@@ -805,6 +805,14 @@ paths:
         - serviceHmac: []
       tags:
         - Admin
+      parameters:
+        - name: X-Service-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 timestamp included in the HMAC canonical string, validated within a 5-minute skew window.
       requestBody:
         required: true
         content:
@@ -848,6 +856,13 @@ paths:
       tags:
         - Admin
       parameters:
+        - name: X-Service-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 timestamp included in the HMAC canonical string, validated within a 5-minute skew window.
         - name: period_start
           in: query
           required: true
@@ -892,7 +907,7 @@ components:
       type: apiKey
       in: header
       name: X-Service-Signature
-      description: hex(HMAC-SHA256(request body, SERVICE_HMAC_SECRET))
+      description: 'hex(HMAC-SHA256(METHOD + "\n" + request-target + "\n" + X-Service-Timestamp + "\n" + hex(sha256(body)), SERVICE_HMAC_SECRET)). Requires header X-Service-Timestamp (RFC3339), validated within a 5-minute skew window.'
 
   schemas:
     # -------------------------------------------------------------------------
@@ -1330,6 +1345,7 @@ components:
     PutEntitlementsRequest:
       type: object
       required:
+        - tenant_id
         - plan_code
         - message_limit
         - allowed_channels
@@ -1338,6 +1354,9 @@ components:
         - period_start
         - period_end
       properties:
+        tenant_id:
+          type: string
+          format: uuid
         plan_code:
           type: string
         message_limit:
@@ -1347,7 +1366,7 @@ components:
         allowed_channels:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/ChannelType"
         api_key_limit:
           type: integer
           minimum: 1

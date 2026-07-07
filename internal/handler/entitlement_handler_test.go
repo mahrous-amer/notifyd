@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,9 +55,10 @@ func TestEntitlementHandler_Put_StoresEntitlements(t *testing.T) {
 	repo := &fakeEntRepo{}
 	h := NewEntitlementHandler(repo, &fakeUsageRepo{})
 	tenantID := uuid.New()
-	body := `{"plan_code":"pro","message_limit":50000,"allowed_channels":["discord","telegram","whatsapp"],
-		"api_key_limit":3,"retention_days":90,
-		"period_start":"2026-07-01T00:00:00Z","period_end":"2026-08-01T00:00:00Z"}`
+	body := fmt.Sprintf(`{"tenant_id":"%s","plan_code":"pro","message_limit":50000,`+
+		`"allowed_channels":["discord","telegram","whatsapp"],`+
+		`"api_key_limit":3,"retention_days":90,`+
+		`"period_start":"2026-07-01T00:00:00Z","period_end":"2026-08-01T00:00:00Z"}`, tenantID)
 
 	rec := httptest.NewRecorder()
 	h.Put(rec, newEntRequest(t, tenantID, body))
@@ -71,12 +73,29 @@ func TestEntitlementHandler_Put_StoresEntitlements(t *testing.T) {
 
 func TestEntitlementHandler_Put_RejectsInvalidChannel(t *testing.T) {
 	h := NewEntitlementHandler(&fakeEntRepo{}, &fakeUsageRepo{})
-	body := `{"plan_code":"pro","message_limit":1,"allowed_channels":["smoke-signal"],
-		"api_key_limit":1,"retention_days":7,
-		"period_start":"2026-07-01T00:00:00Z","period_end":"2026-08-01T00:00:00Z"}`
+	tenantID := uuid.New()
+	body := fmt.Sprintf(`{"tenant_id":"%s","plan_code":"pro","message_limit":1,`+
+		`"allowed_channels":["smoke-signal"],`+
+		`"api_key_limit":1,"retention_days":7,`+
+		`"period_start":"2026-07-01T00:00:00Z","period_end":"2026-08-01T00:00:00Z"}`, tenantID)
 
 	rec := httptest.NewRecorder()
-	h.Put(rec, newEntRequest(t, uuid.New(), body))
+	h.Put(rec, newEntRequest(t, tenantID, body))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestEntitlementHandler_Put_RejectsMismatchedTenantID(t *testing.T) {
+	h := NewEntitlementHandler(&fakeEntRepo{}, &fakeUsageRepo{})
+	pathTenantID := uuid.New()
+	bodyTenantID := uuid.New() // deliberately different from the path tenant ID
+	body := fmt.Sprintf(`{"tenant_id":"%s","plan_code":"pro","message_limit":1,`+
+		`"allowed_channels":["discord"],`+
+		`"api_key_limit":1,"retention_days":7,`+
+		`"period_start":"2026-07-01T00:00:00Z","period_end":"2026-08-01T00:00:00Z"}`, bodyTenantID)
+
+	rec := httptest.NewRecorder()
+	h.Put(rec, newEntRequest(t, pathTenantID, body))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
