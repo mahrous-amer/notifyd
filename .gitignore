@@ -38,3 +38,6 @@ vendor/
 
 # Local client demos may hold credentials; never commit.
 clients/csharp/
+
+# SDD orchestration scratch (reports, briefs, diffs, ledger)
+.superpowers/
