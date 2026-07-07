@@ -14,13 +14,27 @@ import (
 )
 
 // fakeAPIKeyRepo is a hand-rolled test double for domain.APIKeyRepository.
-// It stores keys in memory; Create appends and CountActiveByTenant returns the
-// total number of stored keys (all treated as active for test simplicity).
+// It stores keys in memory and enforces limits in CreateWithinLimit so the
+// service's plan-limit path can be exercised without a database.
 type fakeAPIKeyRepo struct {
 	keys []*domain.APIKey
 }
 
 func (f *fakeAPIKeyRepo) Create(_ context.Context, k *domain.APIKey) error {
+	f.keys = append(f.keys, k)
+	return nil
+}
+
+func (f *fakeAPIKeyRepo) CreateWithinLimit(_ context.Context, k *domain.APIKey, limit int) error {
+	active := 0
+	for _, existing := range f.keys {
+		if existing.RevokedAt == nil {
+			active++
+		}
+	}
+	if active >= limit {
+		return domain.ErrKeyLimitReached
+	}
 	f.keys = append(f.keys, k)
 	return nil
 }
@@ -39,10 +53,6 @@ func (f *fakeAPIKeyRepo) ListByTenant(_ context.Context, _ uuid.UUID) ([]*domain
 }
 
 func (f *fakeAPIKeyRepo) Revoke(_ context.Context, _, _ uuid.UUID) error { return nil }
-
-func (f *fakeAPIKeyRepo) CountActiveByTenant(_ context.Context, _ uuid.UUID) (int, error) {
-	return len(f.keys), nil
-}
 
 func TestAPIKeyService_Create_ReturnsRawSecretOnce(t *testing.T) {
 	repo := &fakeAPIKeyRepo{}

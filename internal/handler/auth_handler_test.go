@@ -292,3 +292,30 @@ func TestIssueToken_MissingAPISecret_Returns400(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+func TestIssueToken_RevokedKey_Returns401WithGenericError(t *testing.T) {
+	hashedSecret, err := bcrypt.GenerateFromPassword([]byte("test-secret"), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	revokedAt := time.Now().Add(-24 * time.Hour)
+	keyRepo := &stubAPIKeyRepo{
+		getByAPIKeyFn: func(_ context.Context, _ string) (*domain.APIKey, error) {
+			return &domain.APIKey{
+				ID:            uuid.New(),
+				TenantID:      uuid.New(),
+				APIKey:        "tenant-api-key",
+				APISecretHash: string(hashedSecret),
+				RevokedAt:     &revokedAt,
+			}, nil
+		},
+	}
+	f := newAuthHandlerFixture(t, &stubTenantRepo{}, keyRepo)
+
+	rec := issueTokenRequest(t, f.handler, "tenant-api-key", "test-secret")
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "invalid credentials", body["error"])
+}

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,14 +24,6 @@ func (s *APIKeyService) Create(ctx context.Context, tenantID uuid.UUID, label st
 	ent, err := domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
 	if err != nil {
 		return nil, "", err
-	}
-
-	active, err := s.keyRepo.CountActiveByTenant(ctx, tenantID)
-	if err != nil {
-		return nil, "", err
-	}
-	if active >= ent.APIKeyLimit {
-		return nil, "", fmt.Errorf("%w: plan allows %d", domain.ErrKeyLimitReached, ent.APIKeyLimit)
 	}
 
 	apiKey, err := generateRandomHex(32)
@@ -60,7 +51,7 @@ func (s *APIKeyService) Create(ctx context.Context, tenantID uuid.UUID, label st
 		Label:         label,
 		CreatedAt:     time.Now(),
 	}
-	if err := s.keyRepo.Create(ctx, k); err != nil {
+	if err := s.keyRepo.CreateWithinLimit(ctx, k, ent.APIKeyLimit); err != nil {
 		return nil, "", err
 	}
 	return k, rawSecret, nil

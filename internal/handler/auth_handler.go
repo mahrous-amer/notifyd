@@ -89,7 +89,7 @@ func (h *AuthHandler) issueAdminToken(w http.ResponseWriter, providedSecret stri
 
 func (h *AuthHandler) issueTenantToken(w http.ResponseWriter, r *http.Request, req tokenRequest) {
 	key, err := h.keyRepo.GetByAPIKey(r.Context(), req.APIKey)
-	if err != nil || key.RevokedAt != nil {
+	if err != nil || key == nil || key.RevokedAt != nil {
 		response.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}

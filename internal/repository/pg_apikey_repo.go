@@ -74,9 +74,36 @@ func (r *PgAPIKeyRepo) Revoke(ctx context.Context, id, tenantID uuid.UUID) error
 	return nil
 }
 
-func (r *PgAPIKeyRepo) CountActiveByTenant(ctx context.Context, tenantID uuid.UUID) (int, error) {
-	var n int
-	err := r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL`, tenantID).Scan(&n)
-	return n, err
+func (r *PgAPIKeyRepo) CreateWithinLimit(ctx context.Context, k *domain.APIKey, limit int) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Serialize key creation per tenant: concurrent creates queue on the
+	// tenant row so the count below cannot race.
+	var tenantID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, k.TenantID).Scan(&tenantID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+
+	var active int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL`, k.TenantID).Scan(&active); err != nil {
+		return err
+	}
+	if active >= limit {
+		return domain.ErrKeyLimitReached
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO api_keys (id, tenant_id, api_key, api_secret_hash, label, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		k.ID, k.TenantID, k.APIKey, k.APISecretHash, k.Label, k.CreatedAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

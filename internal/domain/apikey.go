@@ -19,8 +19,10 @@ type APIKey struct {
 
 type APIKeyRepository interface {
 	Create(ctx context.Context, k *APIKey) error
+	// CreateWithinLimit atomically creates k if the tenant's active key count
+	// is below limit, returning ErrKeyLimitReached otherwise.
+	CreateWithinLimit(ctx context.Context, k *APIKey, limit int) error
 	GetByAPIKey(ctx context.Context, apiKey string) (*APIKey, error)
 	ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*APIKey, error)
 	Revoke(ctx context.Context, id, tenantID uuid.UUID) error
-	CountActiveByTenant(ctx context.Context, tenantID uuid.UUID) (int, error)
 }
