@@ -201,12 +201,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "403":
-          description: Channel type not permitted by the tenant's plan (`CHANNEL_NOT_IN_PLAN`).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
         "404":
           description: Channel config not found.
           content:

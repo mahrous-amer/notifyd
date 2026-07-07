@@ -70,21 +70,6 @@ func (mr *MockTenantRepositoryMockRecorder) Delete(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockTenantRepository)(nil).Delete), ctx, id)
 }
 
-// GetByAPIKey mocks base method.
-func (m *MockTenantRepository) GetByAPIKey(ctx context.Context, apiKey string) (*domain.Tenant, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByAPIKey", ctx, apiKey)
-	ret0, _ := ret[0].(*domain.Tenant)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetByAPIKey indicates an expected call of GetByAPIKey.
-func (mr *MockTenantRepositoryMockRecorder) GetByAPIKey(ctx, apiKey any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByAPIKey", reflect.TypeOf((*MockTenantRepository)(nil).GetByAPIKey), ctx, apiKey)
-}
-
 // GetByID mocks base method.
 func (m *MockTenantRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Tenant, error) {
 	m.ctrl.T.Helper()

@@ -37,9 +37,6 @@ func (f *fakeMaintTenantRepo) GetByID(context.Context, uuid.UUID) (*domain.Tenan
 func (f *fakeMaintTenantRepo) GetBySlug(context.Context, string) (*domain.Tenant, error) {
 	return nil, domain.ErrNotFound
 }
-func (f *fakeMaintTenantRepo) GetByAPIKey(context.Context, string) (*domain.Tenant, error) {
-	return nil, domain.ErrNotFound
-}
 func (f *fakeMaintTenantRepo) Update(context.Context, uuid.UUID, domain.UpdateTenantInput) (*domain.Tenant, error) {
 	return nil, domain.ErrNotFound
 }

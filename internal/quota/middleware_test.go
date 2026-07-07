@@ -14,13 +14,19 @@ import (
 )
 
 type stubReserver struct {
-	decision *Decision
-	gotN     int64
+	decision    *Decision
+	gotN        int64
+	refundCalls []int64
 }
 
 func (s *stubReserver) Reserve(_ context.Context, _ uuid.UUID, n int64) (*Decision, error) {
 	s.gotN = n
 	return s.decision, nil
+}
+
+func (s *stubReserver) Refund(_ context.Context, _ uuid.UUID, n int64) error {
+	s.refundCalls = append(s.refundCalls, n)
+	return nil
 }
 
 func withClaims(req *http.Request) *http.Request {
@@ -71,4 +77,55 @@ func TestQuotaMiddleware_RejectsWith429(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 	assert.Contains(t, rec.Body.String(), "QUOTA_EXCEEDED")
 	assert.Contains(t, rec.Body.String(), "https://portal.fluxintek.com/billing")
+}
+
+// TestQuotaMiddleware_Refund_On4xx verifies that a 4xx handler response
+// triggers a Refund call with the originally reserved n.
+func TestQuotaMiddleware_Refund_On4xx(t *testing.T) {
+	res := &stubReserver{decision: &Decision{Allowed: true}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	req := withClaims(httptest.NewRequest(http.MethodPost, "/notifications/send", strings.NewReader(`{"body":"hi"}`)))
+	rec := httptest.NewRecorder()
+
+	Middleware(res, "u")(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Len(t, res.refundCalls, 1, "Refund must be called exactly once on 4xx")
+	assert.Equal(t, int64(1), res.refundCalls[0], "Refund must be called with the reserved n")
+}
+
+// TestQuotaMiddleware_NoRefund_On2xx verifies that a 2xx handler response does
+// NOT trigger a Refund call.
+func TestQuotaMiddleware_NoRefund_On2xx(t *testing.T) {
+	res := &stubReserver{decision: &Decision{Allowed: true}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	req := withClaims(httptest.NewRequest(http.MethodPost, "/notifications/send", strings.NewReader(`{"body":"hi"}`)))
+	rec := httptest.NewRecorder()
+
+	Middleware(res, "u")(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Empty(t, res.refundCalls, "Refund must NOT be called on 2xx")
+}
+
+// TestQuotaMiddleware_Refund_SendMulti_On4xx verifies that a send-multi
+// reservation of n=3 is fully refunded when the handler returns 403.
+func TestQuotaMiddleware_Refund_SendMulti_On4xx(t *testing.T) {
+	res := &stubReserver{decision: &Decision{Allowed: true}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	body := `{"channels":[{"channel_config_id":"a"},{"channel_config_id":"b"},{"channel_config_id":"c"}],"body":"hi"}`
+	req := withClaims(httptest.NewRequest(http.MethodPost, "/notifications/send-multi", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+
+	Middleware(res, "u")(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Len(t, res.refundCalls, 1, "Refund must be called exactly once")
+	assert.Equal(t, int64(3), res.refundCalls[0], "Refund must return all 3 reserved slots")
 }

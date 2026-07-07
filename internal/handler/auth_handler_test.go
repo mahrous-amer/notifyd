@@ -22,15 +22,7 @@ import (
 // each test can inject its own behaviour without a separate type per test.
 type stubTenantRepo struct {
 	domain.TenantRepository
-	getByAPIKeyFn func(ctx context.Context, apiKey string) (*domain.Tenant, error)
-	getByIDFn     func(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
-}
-
-func (s *stubTenantRepo) GetByAPIKey(ctx context.Context, apiKey string) (*domain.Tenant, error) {
-	if s.getByAPIKeyFn != nil {
-		return s.getByAPIKeyFn(ctx, apiKey)
-	}
-	return nil, domain.ErrNotFound
+	getByIDFn func(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
 }
 
 func (s *stubTenantRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Tenant, error) {

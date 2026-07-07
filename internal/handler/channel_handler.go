@@ -135,10 +135,6 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "channel config not found")
 			return
 		}
-		if errors.Is(err, domain.ErrChannelNotInPlan) {
-			response.Error(w, http.StatusForbidden, "CHANNEL_NOT_IN_PLAN")
-			return
-		}
 		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

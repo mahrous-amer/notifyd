@@ -14,17 +14,33 @@ import (
 	"github.com/bse/notifyd/pkg/response"
 )
 
-type Reserver interface {
+// ReserverRefunder is the quota service interface required by Middleware.
+type ReserverRefunder interface {
 	Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*Decision, error)
+	Refund(ctx context.Context, tenantID uuid.UUID, n int64) error
+}
+
+// statusRecorder wraps http.ResponseWriter and captures the HTTP status code
+// written by the downstream handler (defaults to 200 if WriteHeader is never
+// called).
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
 }
 
 // Middleware enforces the tenant's message quota on send endpoints. For
 // send-multi the reservation size equals the number of requested channels;
 // the body is restored for the downstream handler.
-func Middleware(svc Reserver, upgradeURL string) func(http.Handler) http.Handler {
+func Middleware(svc ReserverRefunder, upgradeURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			claims := auth.GetClaims(r.Context())
+			ctx := r.Context()
+			claims := auth.GetClaims(ctx)
 			if claims == nil {
 				response.Error(w, http.StatusUnauthorized, "unauthorized")
 				return
@@ -46,7 +62,7 @@ func Middleware(svc Reserver, upgradeURL string) func(http.Handler) http.Handler
 				}
 			}
 
-			decision, err := svc.Reserve(r.Context(), claims.TenantID, n)
+			decision, err := svc.Reserve(ctx, claims.TenantID, n)
 			if err != nil {
 				response.Error(w, http.StatusInternalServerError, "internal server error")
 				return
@@ -58,7 +74,16 @@ func Middleware(svc Reserver, upgradeURL string) func(http.Handler) http.Handler
 				})
 				return
 			}
-			next.ServeHTTP(w, r)
+
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+
+			if recorder.status >= 400 {
+				// NOTE: threshold webhooks fired during Reserve before this reject was known;
+				// a refunded reject may have already emitted a webhook. Acceptable while billing
+				// is not consuming webhooks.
+				svc.Refund(ctx, claims.TenantID, n) //nolint:errcheck
+			}
 		})
 	}
 }

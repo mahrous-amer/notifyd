@@ -32,7 +32,6 @@ type TenantRepository interface {
 	Create(ctx context.Context, tenant *Tenant) error
 	GetByID(ctx context.Context, id uuid.UUID) (*Tenant, error)
 	GetBySlug(ctx context.Context, slug string) (*Tenant, error)
-	GetByAPIKey(ctx context.Context, apiKey string) (*Tenant, error)
 	Update(ctx context.Context, id uuid.UUID, input UpdateTenantInput) (*Tenant, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, limit, offset int) ([]*Tenant, int, error)

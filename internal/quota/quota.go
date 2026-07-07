@@ -85,6 +85,28 @@ func (s *Service) Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*De
 	return &Decision{Allowed: true, Used: used, Limit: ent.MessageLimit}, nil
 }
 
+// Refund decrements the tenant's usage counter by n. It is called when a
+// downstream handler returns a 4xx status, meaning the reserved slots were
+// never consumed. The counter is clamped to 0 on underflow.
+func (s *Service) Refund(ctx context.Context, tenantID uuid.UUID, n int64) error {
+	ent, err := s.EntitlementsFor(ctx, tenantID)
+	if err != nil {
+		s.logger.Debug().Err(err).Msg("quota refund: failed to resolve entitlements")
+		return err
+	}
+	key := usageKey(tenantID, ent.PeriodStart)
+	newVal, err := s.rdb.DecrBy(ctx, key, n).Result()
+	if err != nil {
+		s.logger.Debug().Err(err).Str("key", key).Msg("quota refund: DecrBy failed")
+		return err
+	}
+	if newVal < 0 {
+		// Guard against underflow (e.g. concurrent refunds or counter drift)
+		s.rdb.Set(ctx, key, 0, 0) //nolint:errcheck
+	}
+	return nil
+}
+
 func crossed(prev, now, limit int64, pct int64) bool {
 	threshold := limit * pct / 100
 	return prev < threshold && now >= threshold
