@@ -99,6 +99,30 @@ func TestReserve_RejectsWhenPeriodExpired(t *testing.T) {
 	assert.Equal(t, int64(0), exists, "Redis usage key must not be created when the period is expired")
 }
 
+func TestReserve_RejectsExactlyAtPeriodEnd(t *testing.T) {
+	rdb := testRedis(t)
+	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })
+
+	tenantID := uuid.New()
+	// PeriodEnd is now: the half-open interval [start, end) excludes this instant,
+	// so the send belongs to the next period and must be rejected.
+	boundaryEnt := &domain.Entitlements{
+		MessageLimit: 1000,
+		PeriodStart:  time.Now().Add(-48 * time.Hour),
+		PeriodEnd:    time.Now(),
+	}
+	svc := NewService(rdb, &stubEntRepo{ent: boundaryEnt}, "", &http.Client{}, zerolog.Nop())
+
+	d, err := svc.Reserve(context.Background(), tenantID, 1)
+
+	assert.ErrorIs(t, err, ErrPeriodExpired, "a send exactly at PeriodEnd is outside the period and must be rejected")
+	assert.Nil(t, d)
+	key := usageKey(tenantID, boundaryEnt.PeriodStart)
+	exists, redisErr := rdb.Exists(context.Background(), key).Result()
+	require.NoError(t, redisErr)
+	assert.Equal(t, int64(0), exists, "counter must not be touched at the boundary")
+}
+
 func TestReserve_AllowsWhenPeriodIsActive(t *testing.T) {
 	rdb := testRedis(t)
 	t.Cleanup(func() { rdb.FlushDB(context.Background()); rdb.Close() })

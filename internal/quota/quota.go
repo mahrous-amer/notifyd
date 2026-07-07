@@ -58,7 +58,10 @@ func (s *Service) Reserve(ctx context.Context, tenantID uuid.UUID, n int64) (*De
 	if err != nil {
 		return nil, err
 	}
-	if time.Now().After(ent.PeriodEnd) {
+	// Reject at or after PeriodEnd. The period is the half-open interval
+	// [PeriodStart, PeriodEnd), matching usage counting (created_at < PeriodEnd),
+	// so a send exactly at PeriodEnd belongs to the next period, not this one.
+	if !time.Now().Before(ent.PeriodEnd) {
 		return nil, ErrPeriodExpired
 	}
 	key := usageKey(tenantID, ent.PeriodStart)
