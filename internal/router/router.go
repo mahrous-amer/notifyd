@@ -91,6 +91,7 @@ func New(
 			r.Route("/tenants", func(r chi.Router) {
 				r.Get("/", tenantH.List)
 				r.Post("/", tenantH.Create)
+				r.Get("/by-slug/{slug}", tenantH.GetBySlug)
 				r.Route("/{tenantID}", func(r chi.Router) {
 					r.Get("/", tenantH.GetByID)
 					r.Patch("/", tenantH.Update)
