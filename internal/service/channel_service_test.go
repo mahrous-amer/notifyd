@@ -19,6 +19,57 @@ import (
 	"github.com/bse/notifyd/internal/service"
 )
 
+// fakeEntitlementRepo is a hand-rolled test double for domain.EntitlementRepository.
+// When ent is nil, GetByTenantID returns ErrNotFound, causing EntitlementsOrFree
+// to fall back to the Free-plan defaults.
+type fakeEntitlementRepo struct{ ent *domain.Entitlements }
+
+func (f *fakeEntitlementRepo) Upsert(context.Context, *domain.Entitlements) error { return nil }
+func (f *fakeEntitlementRepo) ListAll(context.Context) ([]*domain.Entitlements, error) {
+	return nil, nil
+}
+func (f *fakeEntitlementRepo) GetByTenantID(_ context.Context, _ uuid.UUID) (*domain.Entitlements, error) {
+	if f.ent == nil {
+		return nil, domain.ErrNotFound
+	}
+	return f.ent, nil
+}
+
+// fakeChannelConfigRepo is a no-op repository used by newTestChannelService.
+// Create always succeeds; all other methods return ErrNotFound or empty results.
+type fakeChannelConfigRepo struct{}
+
+func (f *fakeChannelConfigRepo) Create(_ context.Context, _ *domain.ChannelConfig) error {
+	return nil
+}
+func (f *fakeChannelConfigRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.ChannelConfig, error) {
+	return nil, domain.ErrNotFound
+}
+func (f *fakeChannelConfigRepo) ListByTenant(_ context.Context, _ uuid.UUID) ([]*domain.ChannelConfig, error) {
+	return nil, nil
+}
+func (f *fakeChannelConfigRepo) ListByTenantAndChannel(_ context.Context, _ uuid.UUID, _ domain.ChannelType) ([]*domain.ChannelConfig, error) {
+	return nil, nil
+}
+func (f *fakeChannelConfigRepo) Update(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ domain.UpdateChannelConfigInput) (*domain.ChannelConfig, error) {
+	return nil, domain.ErrNotFound
+}
+func (f *fakeChannelConfigRepo) Delete(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
+
+// newTestChannelService builds a ChannelService with fake repositories and all
+// three providers registered. It is used by tests that only care about the
+// entitlement gate, not about mock expectations on the channel config repository.
+func newTestChannelService(t *testing.T, entRepo domain.EntitlementRepository) *service.ChannelService {
+	t.Helper()
+	registry := provider.NewRegistry()
+	registry.Register(provider.NewDiscordProvider(http.DefaultClient))
+	registry.Register(provider.NewTelegramProvider(http.DefaultClient))
+	registry.Register(provider.NewWhatsAppProvider(http.DefaultClient))
+	return service.NewChannelService(&fakeChannelConfigRepo{}, entRepo, registry, zerolog.Nop())
+}
+
 // buildChannelServiceFixture constructs a ChannelService with a mocked
 // repository and a real provider.Registry that has a DiscordProvider registered.
 func buildChannelServiceFixture(t *testing.T) (*service.ChannelService, *mocks.MockChannelConfigRepository) {
@@ -31,7 +82,8 @@ func buildChannelServiceFixture(t *testing.T) (*service.ChannelService, *mocks.M
 	registry.Register(provider.NewDiscordProvider(http.DefaultClient))
 
 	logger := zerolog.Nop()
-	svc := service.NewChannelService(repo, registry, logger)
+	// Free entitlements (no row) allow Discord, so all existing tests pass.
+	svc := service.NewChannelService(repo, &fakeEntitlementRepo{}, registry, logger)
 
 	return svc, repo
 }
@@ -259,4 +311,35 @@ func TestChannelService_Delete_DelegatesToRepo(t *testing.T) {
 	err := svc.Delete(ctx, id, tenantID)
 
 	require.NoError(t, err)
+}
+
+// TestChannelService_Create_RejectsChannelNotInPlan verifies that attempting to
+// create a WhatsApp channel under the Free plan (which only allows Discord and
+// Telegram) returns ErrChannelNotInPlan.
+func TestChannelService_Create_RejectsChannelNotInPlan(t *testing.T) {
+	// Free plan (no entitlements row) does not include whatsapp.
+	svc := newTestChannelService(t, &fakeEntitlementRepo{})
+
+	_, err := svc.Create(context.Background(), uuid.New(), domain.CreateChannelConfigInput{
+		Channel: domain.ChannelWhatsApp,
+		Name:    "wa",
+		Config:  json.RawMessage(`{"phone_number_id":"1","access_token":"t","recipient":"2"}`),
+	})
+
+	assert.ErrorIs(t, err, domain.ErrChannelNotInPlan)
+}
+
+// TestChannelService_Create_AllowsChannelInPlan verifies that a tenant with an
+// explicit entitlement for WhatsApp can create a WhatsApp channel without error.
+func TestChannelService_Create_AllowsChannelInPlan(t *testing.T) {
+	ent := &domain.Entitlements{AllowedChannels: []domain.ChannelType{domain.ChannelWhatsApp}}
+	svc := newTestChannelService(t, &fakeEntitlementRepo{ent: ent})
+
+	_, err := svc.Create(context.Background(), uuid.New(), domain.CreateChannelConfigInput{
+		Channel: domain.ChannelWhatsApp,
+		Name:    "wa",
+		Config:  json.RawMessage(`{"phone_number_id":"1","access_token":"t","recipient":"2"}`),
+	})
+
+	assert.NoError(t, err)
 }

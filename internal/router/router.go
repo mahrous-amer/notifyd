@@ -28,6 +28,10 @@ func New(
 	notifH *handler.NotificationHandler,
 	authH *handler.AuthHandler,
 	healthH *handler.HealthHandler,
+	entH *handler.EntitlementHandler,
+	svcHMACSecret string,
+	quotaMW func(http.Handler) http.Handler,
+	apiKeyH *handler.APIKeyHandler,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -52,6 +56,12 @@ func New(
 	r.Group(func(r chi.Router) {
 		r.Use(auth.Middleware(jwtMgr))
 
+		r.Route("/keys", func(r chi.Router) {
+			r.Get("/", apiKeyH.List)
+			r.Post("/", apiKeyH.Create)
+			r.Delete("/{keyID}", apiKeyH.Revoke)
+		})
+
 		r.Route("/channels", func(r chi.Router) {
 			r.Get("/", channelH.List)
 			r.Post("/", channelH.Create)
@@ -63,8 +73,8 @@ func New(
 		})
 
 		r.Route("/notifications", func(r chi.Router) {
-			r.Post("/send", notifH.Send)
-			r.Post("/send-multi", notifH.SendMulti)
+			r.With(quotaMW).Post("/send", notifH.Send)
+			r.With(quotaMW).Post("/send-multi", notifH.SendMulti)
 			r.Get("/", notifH.List)
 			r.Route("/{notificationID}", func(r chi.Router) {
 				r.Get("/", notifH.GetByID)
@@ -75,16 +85,24 @@ func New(
 	})
 
 	r.Route("/admin", func(r chi.Router) {
-		r.Use(auth.Middleware(jwtMgr))
-		r.Use(auth.AdminMiddleware())
-		r.Route("/tenants", func(r chi.Router) {
-			r.Get("/", tenantH.List)
-			r.Post("/", tenantH.Create)
-			r.Route("/{tenantID}", func(r chi.Router) {
-				r.Get("/", tenantH.GetByID)
-				r.Patch("/", tenantH.Update)
-				r.Delete("/", tenantH.Delete)
+		r.Group(func(r chi.Router) {
+			r.Use(auth.Middleware(jwtMgr))
+			r.Use(auth.AdminMiddleware())
+			r.Route("/tenants", func(r chi.Router) {
+				r.Get("/", tenantH.List)
+				r.Post("/", tenantH.Create)
+				r.Route("/{tenantID}", func(r chi.Router) {
+					r.Get("/", tenantH.GetByID)
+					r.Patch("/", tenantH.Update)
+					r.Delete("/", tenantH.Delete)
+				})
 			})
+		})
+		// Service-to-service routes (billing -> notifyd), HMAC-authenticated.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.HMACMiddleware(svcHMACSecret))
+			r.Put("/tenants/{tenantID}/entitlements", entH.Put)
+			r.Get("/tenants/{tenantID}/usage", entH.Usage)
 		})
 	})
 

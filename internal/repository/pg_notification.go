@@ -169,6 +169,70 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 	return notifications, total, nil
 }
 
+func (r *PgNotificationRepo) UsageByTenant(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (*domain.UsageReport, error) {
+	report := &domain.UsageReport{ByChannel: map[string]int64{}}
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE n.status = 'delivered'),
+		       COUNT(*) FILTER (WHERE n.status = 'failed')
+		FROM notifications n
+		WHERE n.tenant_id = $1 AND n.created_at >= $2 AND n.created_at < $3`,
+		tenantID, from, to).Scan(&report.Sent, &report.Delivered, &report.Failed)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT c.channel, COUNT(*)
+		FROM notifications n
+		JOIN channel_configs c ON c.id = n.channel_config_id
+		WHERE n.tenant_id = $1 AND n.created_at >= $2 AND n.created_at < $3
+		GROUP BY c.channel`, tenantID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channel string
+		var count int64
+		if err := rows.Scan(&channel, &count); err != nil {
+			return nil, err
+		}
+		report.ByChannel[channel] = count
+	}
+	return report, rows.Err()
+}
+
+// DeleteOlderThan removes notifications and their associated delivery records
+// for a given tenant that were created before the cutoff time. Child rows in
+// delivery_attempts and delivery_metrics are deleted first so this works
+// regardless of FK cascade settings on the older migrations.
+func (r *PgNotificationRepo) DeleteOlderThan(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM delivery_attempts WHERE notification_id IN
+			(SELECT id FROM notifications WHERE tenant_id = $1 AND created_at < $2)`, tenantID, cutoff); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM delivery_metrics WHERE notification_id IN
+			(SELECT id FROM notifications WHERE tenant_id = $1 AND created_at < $2)`, tenantID, cutoff); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM notifications WHERE tenant_id = $1 AND created_at < $2`, tenantID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), tx.Commit(ctx)
+}
+
 // CountByStatus returns a map of notification status to count across all tenants.
 // It issues a single aggregation query rather than N per-tenant queries.
 func (r *PgNotificationRepo) CountByStatus(ctx context.Context) (map[domain.NotificationStatus]int, error) {

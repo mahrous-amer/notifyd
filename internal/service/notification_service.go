@@ -18,6 +18,7 @@ import (
 type NotificationService struct {
 	notifRepo   domain.NotificationRepository
 	channelRepo domain.ChannelConfigRepository
+	entRepo     domain.EntitlementRepository
 	asynqClient *asynq.Client
 	maxRetries  int
 	logger      zerolog.Logger
@@ -26,6 +27,7 @@ type NotificationService struct {
 func NewNotificationService(
 	notifRepo domain.NotificationRepository,
 	channelRepo domain.ChannelConfigRepository,
+	entRepo domain.EntitlementRepository,
 	asynqClient *asynq.Client,
 	maxRetries int,
 	logger zerolog.Logger,
@@ -33,6 +35,7 @@ func NewNotificationService(
 	return &NotificationService{
 		notifRepo:   notifRepo,
 		channelRepo: channelRepo,
+		entRepo:     entRepo,
 		asynqClient: asynqClient,
 		maxRetries:  maxRetries,
 		logger:      logger,
@@ -49,6 +52,14 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 	}
 	if !channelCfg.IsActive {
 		return nil, fmt.Errorf("%w: channel config is disabled", domain.ErrValidationFailed)
+	}
+
+	ent, err := domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !ent.AllowsChannel(channelCfg.Channel) {
+		return nil, fmt.Errorf("%w: %s", domain.ErrChannelNotInPlan, channelCfg.Channel)
 	}
 
 	maxRetries := s.effectiveMaxRetries(channelCfg)

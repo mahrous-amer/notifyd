@@ -16,6 +16,7 @@ import (
 
 type AuthHandler struct {
 	tenantRepo     domain.TenantRepository
+	keyRepo        domain.APIKeyRepository
 	jwtMgr         *auth.JWTManager
 	adminAPIKey    string
 	adminAPISecret string
@@ -23,12 +24,14 @@ type AuthHandler struct {
 
 func NewAuthHandler(
 	tenantRepo domain.TenantRepository,
+	keyRepo domain.APIKeyRepository,
 	jwtMgr *auth.JWTManager,
 	adminAPIKey string,
 	adminAPISecret string,
 ) *AuthHandler {
 	return &AuthHandler{
 		tenantRepo:     tenantRepo,
+		keyRepo:        keyRepo,
 		jwtMgr:         jwtMgr,
 		adminAPIKey:    adminAPIKey,
 		adminAPISecret: adminAPISecret,
@@ -85,18 +88,23 @@ func (h *AuthHandler) issueAdminToken(w http.ResponseWriter, providedSecret stri
 }
 
 func (h *AuthHandler) issueTenantToken(w http.ResponseWriter, r *http.Request, req tokenRequest) {
-	tenant, err := h.tenantRepo.GetByAPIKey(r.Context(), req.APIKey)
-	if err != nil {
+	key, err := h.keyRepo.GetByAPIKey(r.Context(), req.APIKey)
+	if err != nil || key == nil || key.RevokedAt != nil {
 		response.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
+	tenant, err := h.tenantRepo.GetByID(r.Context(), key.TenantID)
+	if err != nil {
+		response.Error(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
 	if !tenant.IsActive {
 		response.Error(w, http.StatusForbidden, "tenant is disabled")
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(tenant.APISecret), []byte(req.APISecret)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(key.APISecretHash), []byte(req.APISecret)); err != nil {
 		response.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}

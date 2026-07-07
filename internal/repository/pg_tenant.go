@@ -51,13 +51,6 @@ func (r *PgTenantRepo) GetBySlug(ctx context.Context, slug string) (*domain.Tena
 	return r.scanTenant(r.pool.QueryRow(ctx, query, slug))
 }
 
-func (r *PgTenantRepo) GetByAPIKey(ctx context.Context, apiKey string) (*domain.Tenant, error) {
-	query := `
-		SELECT id, name, slug, api_key, api_secret, is_active, created_at, updated_at
-		FROM tenants WHERE api_key = $1`
-	return r.scanTenant(r.pool.QueryRow(ctx, query, apiKey))
-}
-
 func (r *PgTenantRepo) Update(ctx context.Context, id uuid.UUID, input domain.UpdateTenantInput) (*domain.Tenant, error) {
 	query := `
 		UPDATE tenants

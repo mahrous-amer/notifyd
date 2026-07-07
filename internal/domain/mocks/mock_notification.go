@@ -12,6 +12,7 @@ package mocks
 import (
 	context "context"
 	reflect "reflect"
+	time "time"
 
 	domain "github.com/bse/notifyd/internal/domain"
 	uuid "github.com/google/uuid"
@@ -40,6 +41,21 @@ func NewMockNotificationRepository(ctrl *gomock.Controller) *MockNotificationRep
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockNotificationRepository) EXPECT() *MockNotificationRepositoryMockRecorder {
 	return m.recorder
+}
+
+// DeleteOlderThan mocks base method.
+func (m *MockNotificationRepository) DeleteOlderThan(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteOlderThan", ctx, tenantID, cutoff)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteOlderThan indicates an expected call of DeleteOlderThan.
+func (mr *MockNotificationRepositoryMockRecorder) DeleteOlderThan(ctx, tenantID, cutoff any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteOlderThan", reflect.TypeOf((*MockNotificationRepository)(nil).DeleteOlderThan), ctx, tenantID, cutoff)
 }
 
 // CountByStatus mocks base method.
@@ -156,6 +172,21 @@ func (m *MockNotificationRepository) SetProviderMsgID(ctx context.Context, id uu
 func (mr *MockNotificationRepositoryMockRecorder) SetProviderMsgID(ctx, id, providerMsgID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetProviderMsgID", reflect.TypeOf((*MockNotificationRepository)(nil).SetProviderMsgID), ctx, id, providerMsgID)
+}
+
+// UsageByTenant mocks base method.
+func (m *MockNotificationRepository) UsageByTenant(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (*domain.UsageReport, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UsageByTenant", ctx, tenantID, from, to)
+	ret0, _ := ret[0].(*domain.UsageReport)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UsageByTenant indicates an expected call of UsageByTenant.
+func (mr *MockNotificationRepositoryMockRecorder) UsageByTenant(ctx, tenantID, from, to any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UsageByTenant", reflect.TypeOf((*MockNotificationRepository)(nil).UsageByTenant), ctx, tenantID, from, to)
 }
 
 // UpdateStatus mocks base method.

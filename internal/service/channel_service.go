@@ -14,18 +14,28 @@ import (
 
 type ChannelService struct {
 	repo     domain.ChannelConfigRepository
+	entRepo  domain.EntitlementRepository
 	registry *provider.Registry
 	logger   zerolog.Logger
 }
 
-func NewChannelService(repo domain.ChannelConfigRepository, registry *provider.Registry, logger zerolog.Logger) *ChannelService {
-	return &ChannelService{repo: repo, registry: registry, logger: logger}
+func NewChannelService(repo domain.ChannelConfigRepository, entRepo domain.EntitlementRepository, registry *provider.Registry, logger zerolog.Logger) *ChannelService {
+	return &ChannelService{repo: repo, entRepo: entRepo, registry: registry, logger: logger}
 }
 
 func (s *ChannelService) Create(ctx context.Context, tenantID uuid.UUID, input domain.CreateChannelConfigInput) (*domain.ChannelConfig, error) {
 	if !domain.IsValidChannelType(input.Channel) {
 		return nil, fmt.Errorf("%w: invalid channel type: %s", domain.ErrValidationFailed, input.Channel)
 	}
+
+	ent, err := domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !ent.AllowsChannel(input.Channel) {
+		return nil, fmt.Errorf("%w: %s", domain.ErrChannelNotInPlan, input.Channel)
+	}
+
 	if input.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", domain.ErrValidationFailed)
 	}

@@ -1,0 +1,1443 @@
+openapi: 3.1.0
+info:
+  title: notifyd API
+  version: "1.0"
+  description: Multi-channel notification delivery API by Fluxintek.
+
+servers:
+  - url: https://api.notifyd.fluxintek.com
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns the operational status of the service and its dependencies (Postgres, Redis).
+      operationId: getHealth
+      security: []
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Service is fully operational.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Service is degraded (one or more dependencies unreachable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /auth/token:
+    post:
+      summary: Issue JWT
+      description: Exchange an API key + secret for a short-lived JWT. Accepts both tenant credentials and the admin super-key.
+      operationId: issueToken
+      security: []
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          description: Missing or malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Tenant account is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /channels:
+    get:
+      summary: List channel configs
+      description: Returns all channel configurations belonging to the authenticated tenant.
+      operationId: listChannels
+      tags:
+        - Channels
+      responses:
+        "200":
+          description: Array of channel configs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChannelConfig"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create channel config
+      description: Creates a new channel configuration for the authenticated tenant. The channel type must be included in the tenant's plan entitlements.
+      operationId: createChannel
+      tags:
+        - Channels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChannelConfigInput"
+      responses:
+        "201":
+          description: Channel config created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfig"
+        "400":
+          description: Validation failure or unsupported channel type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Channel type not permitted by the tenant's plan (`CHANNEL_NOT_IN_PLAN`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /channels/{channelID}:
+    parameters:
+      - name: channelID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get channel config
+      operationId: getChannel
+      tags:
+        - Channels
+      responses:
+        "200":
+          description: Channel config found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfig"
+        "400":
+          description: Invalid channel ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Channel config not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      summary: Update channel config
+      operationId: updateChannel
+      tags:
+        - Channels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChannelConfigInput"
+      responses:
+        "200":
+          description: Updated channel config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelConfig"
+        "400":
+          description: Validation failure or unsupported channel type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Channel config not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete channel config
+      operationId: deleteChannel
+      tags:
+        - Channels
+      responses:
+        "204":
+          description: Channel config deleted.
+        "400":
+          description: Invalid channel ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Channel config not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /notifications/send:
+    post:
+      summary: Send notification
+      description: Enqueues a single notification for async delivery. Returns 202 immediately; check status via GET /notifications/{notificationID}.
+      operationId: sendNotification
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendNotificationInput"
+      responses:
+        "202":
+          description: Notification accepted for delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "400":
+          description: Missing required fields or validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Channel type not permitted by the tenant's plan (`CHANNEL_NOT_IN_PLAN`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Channel config not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "402":
+          description: Tenant's billing period has lapsed and no renewal has been pushed yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionExpiredError"
+        "429":
+          description: Tenant message quota exhausted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaExceededError"
+
+  /notifications/send-multi:
+    post:
+      summary: Send to multiple channels
+      description: Enqueues notifications across up to 50 channel configs in one request. Partial success is possible — check the `errors` array in the response.
+      operationId: sendMultiNotification
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMultiInput"
+      responses:
+        "202":
+          description: Batch accepted. Some items may have failed; inspect `errors`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMultiResponse"
+        "400":
+          description: Invalid request body or channel count out of range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "402":
+          description: Tenant's billing period has lapsed and no renewal has been pushed yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionExpiredError"
+        "429":
+          description: Tenant message quota exhausted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaExceededError"
+
+  /notifications:
+    get:
+      summary: List notifications
+      operationId: listNotifications
+      tags:
+        - Notifications
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/NotificationStatus"
+        - name: channel
+          in: query
+          schema:
+            $ref: "#/components/schemas/ChannelType"
+      responses:
+        "200":
+          description: Paginated list of notifications.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationListResponse"
+        "400":
+          description: Invalid status or channel filter value.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /notifications/{notificationID}:
+    parameters:
+      - name: notificationID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get notification
+      operationId: getNotification
+      tags:
+        - Notifications
+      responses:
+        "200":
+          description: Notification found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "400":
+          description: Invalid notification ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /notifications/{notificationID}/attempts:
+    parameters:
+      - name: notificationID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List delivery attempts
+      description: Returns all delivery attempt records for a notification, ordered by attempt number.
+      operationId: listAttempts
+      tags:
+        - Notifications
+      responses:
+        "200":
+          description: List of delivery attempts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliveryAttempt"
+        "400":
+          description: Invalid notification ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /notifications/{notificationID}/metrics:
+    parameters:
+      - name: notificationID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get delivery metrics
+      description: Returns provider-reported engagement metrics for a delivered notification. Returns 404 if metrics have not yet been collected.
+      operationId: getMetrics
+      tags:
+        - Notifications
+      responses:
+        "200":
+          description: Delivery metrics available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryMetric"
+        "400":
+          description: Invalid notification ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Notification not found or metrics not yet available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /keys:
+    get:
+      summary: List API keys
+      description: Returns all API keys for the authenticated tenant. Secret hashes are never returned.
+      operationId: listAPIKeys
+      tags:
+        - API Keys
+      responses:
+        "200":
+          description: List of API keys.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/APIKey"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create API key
+      description: Creates a new API key. The `api_secret` is returned only in this response and cannot be retrieved again.
+      operationId: createAPIKey
+      tags:
+        - API Keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyInput"
+      responses:
+        "201":
+          description: API key created. Save `api_secret` immediately.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+        "400":
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Tenant has reached the API key limit for their plan (`KEY_LIMIT_REACHED`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /keys/{keyID}:
+    parameters:
+      - name: keyID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Revoke API key
+      operationId: revokeAPIKey
+      tags:
+        - API Keys
+      responses:
+        "204":
+          description: Key revoked.
+        "400":
+          description: Invalid key ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/tenants:
+    get:
+      summary: List tenants (admin)
+      operationId: adminListTenants
+      tags:
+        - Admin
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Paginated list of tenants.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not have admin privileges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create tenant (admin)
+      operationId: adminCreateTenant
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantInput"
+      responses:
+        "201":
+          description: Tenant created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          description: Validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not have admin privileges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/tenants/{tenantID}:
+    parameters:
+      - name: tenantID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get tenant (admin)
+      operationId: adminGetTenant
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Tenant found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          description: Invalid tenant ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not have admin privileges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Tenant not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      summary: Update tenant (admin)
+      operationId: adminUpdateTenant
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantInput"
+      responses:
+        "200":
+          description: Updated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          description: Invalid tenant ID format or validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not have admin privileges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Tenant not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete tenant (admin)
+      operationId: adminDeleteTenant
+      tags:
+        - Admin
+      responses:
+        "204":
+          description: Tenant deleted.
+        "400":
+          description: Invalid tenant ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Token does not have admin privileges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Tenant not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/tenants/{tenantID}/entitlements:
+    parameters:
+      - name: tenantID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      summary: Upsert entitlements (service-to-service)
+      description: Called by the billing service to set or replace a tenant's plan entitlements. Authenticated via HMAC-SHA256 signature header.
+      operationId: putEntitlements
+      security:
+        - serviceHmac: []
+      tags:
+        - Admin
+      parameters:
+        - name: X-Service-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 timestamp included in the HMAC canonical string, validated within a 5-minute skew window.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEntitlementsRequest"
+      responses:
+        "200":
+          description: Entitlements saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlements"
+        "400":
+          description: Invalid tenant ID, missing fields, or validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid HMAC signature.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/tenants/{tenantID}/usage:
+    parameters:
+      - name: tenantID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get usage report (service-to-service)
+      description: Called by the billing service to fetch message usage for a billing period. Authenticated via HMAC-SHA256 signature header.
+      operationId: getUsage
+      security:
+        - serviceHmac: []
+      tags:
+        - Admin
+      parameters:
+        - name: X-Service-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 timestamp included in the HMAC canonical string, validated within a 5-minute skew window.
+        - name: period_start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC 3339 timestamp for the start of the billing period.
+        - name: period_end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: RFC 3339 timestamp for the end of the billing period.
+      responses:
+        "200":
+          description: Usage report for the given period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageReport"
+        "400":
+          description: Invalid tenant ID or unparseable period_start/period_end.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid HMAC signature.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    serviceHmac:
+      type: apiKey
+      in: header
+      name: X-Service-Signature
+      description: 'hex(HMAC-SHA256(METHOD + "\n" + request-target + "\n" + X-Service-Timestamp + "\n" + hex(sha256(body)), SERVICE_HMAC_SECRET)). Requires header X-Service-Timestamp (RFC3339), validated within a 5-minute skew window.'
+
+  schemas:
+    # -------------------------------------------------------------------------
+    # Auth
+    # -------------------------------------------------------------------------
+    TokenRequest:
+      type: object
+      required:
+        - api_key
+        - api_secret
+      properties:
+        api_key:
+          type: string
+        api_secret:
+          type: string
+
+    TokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: "Short-lived JWT to be sent as `Authorization: Bearer <token>`."
+        expires_in:
+          type: string
+          description: Human-readable duration until the token expires (e.g. `24h0m0s`).
+
+    # -------------------------------------------------------------------------
+    # Health
+    # -------------------------------------------------------------------------
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - degraded
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          description: Per-dependency status values (`ok` or `error`). Keys include `postgres` and `redis`.
+
+    # -------------------------------------------------------------------------
+    # Tenants
+    # -------------------------------------------------------------------------
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        api_key:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantInput:
+      type: object
+      required:
+        - name
+        - slug
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+
+    UpdateTenantInput:
+      type: object
+      properties:
+        name:
+          type: string
+        is_active:
+          type: boolean
+
+    TenantListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tenant"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    # -------------------------------------------------------------------------
+    # Channels
+    # -------------------------------------------------------------------------
+    ChannelType:
+      type: string
+      enum:
+        - discord
+        - telegram
+        - whatsapp
+
+    DeliveryPreferences:
+      type: object
+      properties:
+        priority:
+          type: string
+          enum:
+            - critical
+            - normal
+            - low
+          description: Maps to the async queue priority.
+        max_retries:
+          type: integer
+          minimum: 0
+          description: Overrides the service-level default when set.
+        format_mode:
+          type: string
+          enum:
+            - plain
+            - markdown
+            - html
+          description: Controls message rendering mode.
+
+    ChannelConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        channel:
+          $ref: "#/components/schemas/ChannelType"
+        name:
+          type: string
+        config:
+          type: object
+          description: Provider-specific configuration object (e.g. bot token, chat ID). Structure varies by channel type.
+        is_active:
+          type: boolean
+        delivery_prefs:
+          $ref: "#/components/schemas/DeliveryPreferences"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateChannelConfigInput:
+      type: object
+      required:
+        - channel
+        - name
+        - config
+      properties:
+        channel:
+          $ref: "#/components/schemas/ChannelType"
+        name:
+          type: string
+        config:
+          type: object
+          description: Provider-specific configuration object.
+        delivery_prefs:
+          $ref: "#/components/schemas/DeliveryPreferences"
+
+    UpdateChannelConfigInput:
+      type: object
+      properties:
+        name:
+          type: string
+        config:
+          type: object
+          description: Provider-specific configuration object.
+        is_active:
+          type: boolean
+        delivery_prefs:
+          $ref: "#/components/schemas/DeliveryPreferences"
+
+    # -------------------------------------------------------------------------
+    # Notifications
+    # -------------------------------------------------------------------------
+    NotificationStatus:
+      type: string
+      enum:
+        - pending
+        - processing
+        - delivered
+        - failed
+        - retrying
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        channel_config_id:
+          type: string
+          format: uuid
+        channel:
+          $ref: "#/components/schemas/ChannelType"
+        subject:
+          type: ["string", "null"]
+        body:
+          type: string
+        metadata:
+          type: object
+          description: Arbitrary caller-supplied metadata.
+        status:
+          $ref: "#/components/schemas/NotificationStatus"
+        asynq_task_id:
+          type: ["string", "null"]
+        retry_count:
+          type: integer
+        max_retries:
+          type: integer
+        last_error:
+          type: ["string", "null"]
+        delivered_at:
+          type: ["string", "null"]
+          format: date-time
+        provider_msg_id:
+          type: ["string", "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SendNotificationInput:
+      type: object
+      required:
+        - channel_config_id
+        - body
+      properties:
+        channel_config_id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+        body:
+          type: string
+        metadata:
+          type: object
+          description: Arbitrary key-value metadata stored alongside the notification.
+
+    SendMultiInput:
+      type: object
+      required:
+        - channels
+      properties:
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/SendNotificationInput"
+          minItems: 1
+          maxItems: 50
+
+    SendMultiResponse:
+      type: object
+      properties:
+        sent:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        errors:
+          type: array
+          items:
+            type: string
+          description: Per-item error messages for any channels that failed to enqueue.
+
+    NotificationListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    # -------------------------------------------------------------------------
+    # Delivery Attempts
+    # -------------------------------------------------------------------------
+    AttemptStatus:
+      type: string
+      enum:
+        - success
+        - failure
+
+    DeliveryAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        notification_id:
+          type: string
+          format: uuid
+        attempt_number:
+          type: integer
+        status:
+          $ref: "#/components/schemas/AttemptStatus"
+        provider_response:
+          type: object
+          description: Raw provider API response body.
+        error_message:
+          type: ["string", "null"]
+        duration_ms:
+          type: integer
+          description: Round-trip duration in milliseconds.
+        attempted_at:
+          type: string
+          format: date-time
+
+    # -------------------------------------------------------------------------
+    # Delivery Metrics
+    # -------------------------------------------------------------------------
+    DeliveryMetric:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        notification_id:
+          type: string
+          format: uuid
+        provider_msg_id:
+          type: string
+        delivered_at:
+          type: ["string", "null"]
+          format: date-time
+        read_at:
+          type: ["string", "null"]
+          format: date-time
+        interactions:
+          type: object
+          description: Provider-specific interaction data (e.g. link clicks, reactions).
+        collected_at:
+          type: string
+          format: date-time
+
+    # -------------------------------------------------------------------------
+    # API Keys
+    # -------------------------------------------------------------------------
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        api_key:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: ["string", "null"]
+          format: date-time
+
+    CreateAPIKeyInput:
+      type: object
+      required:
+        - label
+      properties:
+        label:
+          type: string
+
+    CreateAPIKeyResponse:
+      type: object
+      description: Returned once on key creation. The `api_secret` cannot be retrieved again.
+      properties:
+        key:
+          $ref: "#/components/schemas/APIKey"
+        api_secret:
+          type: string
+          description: Plain-text secret shown only at creation time.
+
+    # -------------------------------------------------------------------------
+    # Entitlements
+    # -------------------------------------------------------------------------
+    Entitlements:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        plan_code:
+          type: string
+        message_limit:
+          type: integer
+          format: int64
+        allowed_channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelType"
+        api_key_limit:
+          type: integer
+        retention_days:
+          type: integer
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PutEntitlementsRequest:
+      type: object
+      required:
+        - tenant_id
+        - plan_code
+        - message_limit
+        - allowed_channels
+        - api_key_limit
+        - retention_days
+        - period_start
+        - period_end
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        plan_code:
+          type: string
+        message_limit:
+          type: integer
+          format: int64
+          minimum: 0
+        allowed_channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelType"
+        api_key_limit:
+          type: integer
+          minimum: 1
+        retention_days:
+          type: integer
+          minimum: 1
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+
+    # -------------------------------------------------------------------------
+    # Usage
+    # -------------------------------------------------------------------------
+    UsageReport:
+      type: object
+      properties:
+        sent:
+          type: integer
+          format: int64
+        delivered:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        by_channel:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          description: Per-channel message counts keyed by channel type string.
+
+    # -------------------------------------------------------------------------
+    # Shared error shapes
+    # -------------------------------------------------------------------------
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code or human-readable message.
+
+    QuotaExceededError:
+      type: object
+      properties:
+        error:
+          type: string
+          enum:
+            - QUOTA_EXCEEDED
+        upgrade_url:
+          type: string
+          format: uri
+          description: URL where the tenant can upgrade their plan.
+
+    SubscriptionExpiredError:
+      type: object
+      properties:
+        error:
+          type: string
+          enum:
+            - SUBSCRIPTION_PERIOD_EXPIRED
+        renew_url:
+          type: string
+          format: uri
+          description: URL where the tenant can renew or upgrade their subscription.

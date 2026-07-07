@@ -60,6 +60,10 @@ func (h *NotificationHandler) Send(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, "validation failed")
 			return
 		}
+		if errors.Is(err, domain.ErrChannelNotInPlan) {
+			response.Error(w, http.StatusForbidden, "CHANNEL_NOT_IN_PLAN")
+			return
+		}
 		response.Error(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -267,6 +271,9 @@ func sanitizeNotificationError(err error) string {
 	}
 	if errors.Is(err, domain.ErrUnsupportedChannel) {
 		return "unsupported channel"
+	}
+	if errors.Is(err, domain.ErrChannelNotInPlan) {
+		return "CHANNEL_NOT_IN_PLAN"
 	}
 	return "internal server error"
 }
