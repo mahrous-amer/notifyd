@@ -90,6 +90,10 @@ func (s *TenantService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Tena
 	return s.repo.GetByID(ctx, id)
 }
 
+func (s *TenantService) GetBySlug(ctx context.Context, slug string) (*domain.Tenant, error) {
+	return s.repo.GetBySlug(ctx, slug)
+}
+
 func (s *TenantService) Update(ctx context.Context, id uuid.UUID, input domain.UpdateTenantInput) (*domain.Tenant, error) {
 	return s.repo.Update(ctx, id, input)
 }

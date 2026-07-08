@@ -61,6 +61,26 @@ func (h *TenantHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, tenant)
 }
 
+func (h *TenantHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		response.Error(w, http.StatusBadRequest, "slug is required")
+		return
+	}
+
+	tenant, err := h.svc.GetBySlug(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, tenant)
+}
+
 func (h *TenantHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "tenantID"))
 	if err != nil {

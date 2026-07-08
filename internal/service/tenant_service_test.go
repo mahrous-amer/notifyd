@@ -127,6 +127,22 @@ func TestTenantService_GetByID_DelegatesToRepo(t *testing.T) {
 	assert.Equal(t, expected, got)
 }
 
+// TestTenantService_GetBySlug_DelegatesToRepo verifies that GetBySlug forwards
+// the slug to the repository and returns whatever the repository returns.
+func TestTenantService_GetBySlug_DelegatesToRepo(t *testing.T) {
+	svc, repo := buildTenantServiceFixture(t)
+	ctx := context.Background()
+	slug := "acme-corp"
+
+	expected := &domain.Tenant{ID: uuid.New(), Name: "Acme Corp", Slug: slug}
+	repo.EXPECT().GetBySlug(ctx, slug).Return(expected, nil)
+
+	got, err := svc.GetBySlug(ctx, slug)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
 // TestTenantService_Update_DelegatesToRepo verifies that Update forwards the
 // id and input to the repository unchanged.
 func TestTenantService_Update_DelegatesToRepo(t *testing.T) {
