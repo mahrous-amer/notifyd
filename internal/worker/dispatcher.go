@@ -190,6 +190,14 @@ func (d *Dispatcher) handlePermanentProviderFailure(
 	resp *provider.SendResponse,
 	durationMs int,
 ) error {
+	// Still counts as one attempt even though it will never be retried, so
+	// retry_count must be incremented here too — otherwise a first-attempt
+	// permanent failure leaves retry_count at 0 while delivery_attempts
+	// already has attempt_number 1, the same bookkeeping the retrying path
+	// keeps in sync.
+	if dbErr := d.notifRepo.IncrementRetry(ctx, notifID, resp.ErrorMessage); dbErr != nil {
+		log.Error().Err(dbErr).Msg("failed to increment retry count")
+	}
 	if dbErr := d.notifRepo.UpdateStatus(ctx, notifID, domain.StatusFailed, &resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to update notification status to failed")
 	}

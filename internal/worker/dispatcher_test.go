@@ -246,7 +246,12 @@ func TestHandleNotificationDeliver_PermanentProviderFailure_SetsFailedStatusAndS
 			return nil
 		})
 	// A permanent failure goes straight to StatusFailed, never StatusRetrying,
-	// and does not increment the retry counter.
+	// but retry_count must still be incremented so it stays consistent with
+	// delivery_attempts.attempt_number (both record "one attempt happened"),
+	// matching how the retry-exhaustion path keeps the two in sync.
+	f.notifRepo.EXPECT().
+		IncrementRetry(gomock.Any(), notifID, providerErrMsg).
+		Return(nil)
 	f.notifRepo.EXPECT().
 		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
 		Return(nil)
@@ -263,6 +268,59 @@ func TestHandleNotificationDeliver_PermanentProviderFailure_SetsFailedStatusAndS
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), providerErrMsg)
 	assert.True(t, errors.Is(err, asynq.SkipRetry), "permanent provider failures must not be retried")
+}
+
+// TestHandleNotificationDeliver_PermanentProviderFailure_IncrementRetryErrorDoesNotBlockStatusUpdate
+// verifies that a failure to increment the retry counter is logged and
+// swallowed rather than blocking the StatusFailed update, matching the
+// log-and-continue style used throughout the rest of the dispatcher.
+func TestHandleNotificationDeliver_PermanentProviderFailure_IncrementRetryErrorDoesNotBlockStatusUpdate(t *testing.T) {
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+	providerErrMsg := "smtp: mailbox unavailable"
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return &provider.SendResponse{
+				Success:      false,
+				Permanent:    true,
+				ErrorMessage: providerErrMsg,
+			}, nil
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).
+		Return(nil)
+	f.channelRepo.EXPECT().
+		GetByID(gomock.Any(), channelConfigID).
+		Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().
+		Create(gomock.Any(), gomock.Any()).
+		Return(nil)
+	f.notifRepo.EXPECT().
+		IncrementRetry(gomock.Any(), notifID, providerErrMsg).
+		Return(errors.New("db connection lost"))
+	f.notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, asynq.SkipRetry))
 }
 
 func TestHandleNotificationDeliver_TransportError_IncrementsRetry(t *testing.T) {
