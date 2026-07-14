@@ -136,28 +136,30 @@ func TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotUpdateStatus(t *testi
 	t.Skip("asynq retry context values cannot be injected without unexported keys; branch covered by integration tests")
 }
 
-func TestNotifyErrorHandler_LogsTaskTypeAndRetryInfo(t *testing.T) {
-	// Verify that the handler still functions correctly when given a task with a
-	// non-deliver type (it should log but not panic).
+func TestNotifyErrorHandler_UnknownTaskType_LogsButDoesNotTouchNotificationState(t *testing.T) {
+	// A task type the handler doesn't recognize (e.g. retention:purge or
+	// usage:reconcile failing, or some future task type) must not be
+	// assumed to carry a NotificationDeliverPayload — the switch in
+	// HandleError only special-cases the two task types whose payload
+	// shape it actually knows, exactly the fix that also prevents
+	// misinterpreting a WebhookEventTaskPayload as a NotificationDeliverPayload
+	// (see TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState).
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
 
-	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
 
 	notifID := uuid.New()
 
-	// context.Background() → retried==0, maxRetry==0 → 0>=0 → UpdateStatus called.
-	notifRepo.EXPECT().
-		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
-		Return(nil)
-
-	// Use a different task type name; the handler does not filter by type.
+	// No notifRepo.EXPECT() calls registered: UpdateStatus must not be called.
 	payload, _ := json.Marshal(NotificationDeliverPayload{NotificationID: notifID})
 	task := asynq.NewTask("some:other:task:type", payload)
 
 	assert.NotPanics(t, func() {
 		handler.HandleError(context.Background(), task, errors.New("some error"))
 	})
+	assert.Empty(t, emitter.calls)
 }
 
 // TestNotifyErrorHandler_WhenRetriesExhausted_EmitsFailedEvent verifies the
@@ -248,4 +250,39 @@ func TestNotifyErrorHandler_EmitterNotCalled_WhenPayloadInvalid(t *testing.T) {
 	handler.HandleError(context.Background(), task, errors.New("some error"))
 
 	assert.Empty(t, emitter.calls)
+}
+
+// TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState
+// verifies the handler recognizes a "webhook:event" task's own retry
+// exhaustion (dropping the event per the design doc's "then dropped,
+// recorded in logs") instead of misinterpreting WebhookEventTaskPayload's
+// JSON as a NotificationDeliverPayload. json.Unmarshal does not error on
+// unknown/missing fields, so without a task-type check this would silently
+// decode into a zero-value NotificationDeliverPayload — a real notification
+// ID of all-zeros — and both overwrite that notification's status and
+// enqueue a spurious webhook event for it.
+func TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	webhookPayload := WebhookEventTaskPayload{
+		EndpointID: uuid.New(),
+		Event: WebhookEventPayload{
+			ID:   "evt_dropped",
+			Type: "notification.delivered",
+			Data: WebhookEventData{NotificationID: uuid.New()},
+		},
+	}
+	payloadBytes, err := json.Marshal(webhookPayload)
+	require.NoError(t, err)
+	task := asynq.NewTask(TypeWebhookEvent, payloadBytes)
+
+	// No notifRepo.EXPECT() calls registered: UpdateStatus must not be
+	// called at all for a webhook:event task's own exhaustion.
+	handler.HandleError(context.Background(), task, errors.New("endpoint unreachable"))
+
+	assert.Empty(t, emitter.calls, "a webhook:event task's own exhaustion must not enqueue another webhook event")
 }

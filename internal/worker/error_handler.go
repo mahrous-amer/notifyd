@@ -32,24 +32,52 @@ func (h *NotifyErrorHandler) HandleError(ctx context.Context, task *asynq.Task, 
 		Err(err).
 		Msg("task processing error")
 
-	if retried >= maxRetry {
-		h.handleRetriesExhausted(ctx, task, err)
+	if retried < maxRetry {
+		return
+	}
+
+	switch task.Type() {
+	case TypeNotificationDeliver:
+		h.handleNotificationRetriesExhausted(ctx, task, err)
+	case TypeWebhookEvent:
+		h.handleWebhookEventRetriesExhausted(ctx, task, err)
 	}
 }
 
-// handleRetriesExhausted marks a notification permanently failed once its
-// task has run out of retries. asynq invokes HandleError for every failed
-// task unconditionally — including ones whose error wraps asynq.SkipRetry,
-// which dispatcher.go's handlePermanentProviderFailure returns after already
-// marking the notification StatusFailed and emitting notification.failed
-// itself. Re-running that here would both redundantly rewrite the same
-// status and, without the SkipRetry check below, double-emit the webhook
-// event for a single terminal transition — so a SkipRetry error skips
-// emission (the UpdateStatus call below is harmless to repeat since it
-// writes the same status, but is also naturally rare here since
-// handlePermanentProviderFailure's SkipRetry fires almost always on an
-// early attempt, well before retried >= maxRetry).
-func (h *NotifyErrorHandler) handleRetriesExhausted(ctx context.Context, task *asynq.Task, err error) {
+// handleWebhookEventRetriesExhausted logs the permanent drop of a webhook
+// status event once its own delivery retries are exhausted, per the design
+// doc's "then dropped (recorded in logs)". There is deliberately no
+// notification-state or emitter interaction here: a webhook:event task's
+// payload is a WebhookEventTaskPayload, not a NotificationDeliverPayload,
+// and this task type never represents a notification's own delivery — it
+// represents delivery of an *event about* a notification that already
+// reached a terminal state.
+func (h *NotifyErrorHandler) handleWebhookEventRetriesExhausted(_ context.Context, task *asynq.Task, err error) {
+	var p WebhookEventTaskPayload
+	if jsonErr := json.Unmarshal(task.Payload(), &p); jsonErr != nil {
+		return
+	}
+	h.logger.Error().
+		Str("event_id", p.Event.ID).
+		Str("event_type", p.Event.Type).
+		Str("endpoint_id", p.EndpointID.String()).
+		Err(err).
+		Msg("webhook event delivery permanently failed — dropped")
+}
+
+// handleNotificationRetriesExhausted marks a notification permanently
+// failed once its task has run out of retries. asynq invokes HandleError
+// for every failed task unconditionally — including ones whose error wraps
+// asynq.SkipRetry, which dispatcher.go's handlePermanentProviderFailure
+// returns after already marking the notification StatusFailed and emitting
+// notification.failed itself. Re-running that here would both redundantly
+// rewrite the same status and, without the SkipRetry check below,
+// double-emit the webhook event for a single terminal transition — so a
+// SkipRetry error skips emission (the UpdateStatus call below is harmless
+// to repeat since it writes the same status, but is also naturally rare
+// here since handlePermanentProviderFailure's SkipRetry fires almost always
+// on an early attempt, well before retried >= maxRetry).
+func (h *NotifyErrorHandler) handleNotificationRetriesExhausted(ctx context.Context, task *asynq.Task, err error) {
 	var p NotificationDeliverPayload
 	if jsonErr := json.Unmarshal(task.Payload(), &p); jsonErr != nil {
 		return

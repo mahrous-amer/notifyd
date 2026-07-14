@@ -53,6 +53,7 @@ func main() {
 	var attemptRepo domain.DeliveryAttemptRepository = repository.NewPgDeliveryAttemptRepo(dbPool)
 	var channelRepo domain.ChannelConfigRepository = repository.NewPgChannelConfigRepo(dbPool)
 	var metricRepo domain.DeliveryMetricRepository = repository.NewPgDeliveryMetricRepo(dbPool)
+	var webhookEndpointRepo domain.WebhookEndpointRepository = repository.NewPgWebhookEndpointRepo(dbPool)
 
 	tenantRepo := repository.NewPgTenantRepo(dbPool)
 	entRepo := repository.NewPgEntitlementRepo(dbPool)
@@ -63,6 +64,16 @@ func main() {
 	})
 	defer redisCli.Close() //nolint:errcheck
 	maintenance := worker.NewMaintenanceHandler(tenantRepo, entRepo, notifRepo, notifRepo, redisCli, logger)
+
+	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	defer asynqClient.Close() //nolint:errcheck
+	webhookEnqueuer := worker.NewAsynqWebhookEventEnqueuer(asynqClient)
+	webhookEmitter := worker.NewWebhookEventEmitter(webhookEndpointRepo, webhookEnqueuer, logger)
+	webhookDeliveryWorker := worker.NewDefaultWebhookEventDeliveryWorker(webhookEndpointRepo, logger)
 
 	httpTransport := &http.Transport{
 		MaxIdleConns:        100,
@@ -80,16 +91,16 @@ func main() {
 	registry.Register(provider.NewSlackProvider(httpClient))
 	registry.Register(provider.NewWebhookProvider())
 
-	dispatcher := worker.NewDispatcher(registry, notifRepo, attemptRepo, channelRepo, metricRepo, logger)
+	dispatcher := worker.NewDispatcher(registry, notifRepo, attemptRepo, channelRepo, metricRepo, webhookEmitter, logger)
 
-	retryDelay := func(n int, err error, t *asynq.Task) time.Duration {
+	retryDelay := worker.RetryDelayForTask(func(n int, err error, t *asynq.Task) time.Duration {
 		base := cfg.MinRetryDelay * time.Duration(1<<uint(n))
 		if base > cfg.MaxRetryDelay {
 			base = cfg.MaxRetryDelay
 		}
 		jitter := time.Duration(rand.Int64N(int64(base) / 5))
 		return base + jitter
-	}
+	})
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{
@@ -104,10 +115,15 @@ func main() {
 				"critical":      6,
 				"notifications": 3,
 				"low":           1,
+				// Dedicated, lowest-priority queue for status-event delivery
+				// (see webhook_event_task.go's queueWebhooks doc comment) —
+				// a slow or unreachable customer endpoint competes only with
+				// other webhook deliveries, never with actual notifications.
+				"webhooks": 1,
 			},
 			RetryDelayFunc: retryDelay,
 			ErrorHandler: asynq.ErrorHandlerFunc(
-				worker.NewNotifyErrorHandler(notifRepo, logger).HandleError,
+				worker.NewNotifyErrorHandler(notifRepo, webhookEmitter, logger).HandleError,
 			),
 		},
 	)
@@ -116,6 +132,7 @@ func main() {
 	mux.HandleFunc(worker.TypeNotificationDeliver, dispatcher.HandleNotificationDeliver)
 	mux.HandleFunc(worker.TypeRetentionPurge, maintenance.HandleRetentionPurge)
 	mux.HandleFunc(worker.TypeUsageReconcile, maintenance.HandleUsageReconcile)
+	mux.HandleFunc(worker.TypeWebhookEvent, webhookDeliveryWorker.HandleWebhookEvent)
 
 	scheduler := asynq.NewScheduler(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB},
