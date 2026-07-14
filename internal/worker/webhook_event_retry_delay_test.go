@@ -62,3 +62,31 @@ func TestRetryDelayForTask_OtherTaskTypes_UseTheDefaultCurve(t *testing.T) {
 
 	assert.Equal(t, sentinelDelay, delay)
 }
+
+// TestJitter_ZeroBase_DoesNotPanic guards against the panic landmine in
+// rand.Int64N: it panics if called with an argument <= 0. WebhookEventRetryDelay
+// can never actually pass 0 today (webhookEventMinRetryDelay is 2 minutes,
+// so base is always positive), but a future tuner lowering that constant
+// toward zero — or extending this backoff curve to a task type with a
+// smaller starting delay — could reintroduce the crash. jitter must floor
+// its input rather than trust the caller's base is always large enough.
+func TestJitter_ZeroBase_DoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		jitter(0)
+	})
+}
+
+func TestJitter_NegativeBase_DoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		jitter(-1 * time.Second)
+	})
+}
+
+func TestJitter_PositiveBase_StaysWithinOneFifth(t *testing.T) {
+	base := 10 * time.Second
+	for i := 0; i < 100; i++ {
+		j := jitter(base)
+		assert.GreaterOrEqual(t, j, time.Duration(0))
+		assert.Less(t, j, base/5)
+	}
+}

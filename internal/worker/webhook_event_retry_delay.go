@@ -20,12 +20,25 @@ func WebhookEventRetryDelay(n int, _ error, _ *asynq.Task) time.Duration {
 	if base > webhookEventMaxRetryDelay {
 		base = webhookEventMaxRetryDelay
 	}
-	jitter := time.Duration(rand.Int64N(int64(base) / 5))
-	delay := base + jitter
+	delay := base + jitter(base)
 	if delay > webhookEventMaxRetryDelay {
 		delay = webhookEventMaxRetryDelay
 	}
 	return delay
+}
+
+// jitter returns a random duration in [0, base/5) to spread out retries that
+// would otherwise all fire at the same instant. rand.Int64N panics when
+// given an argument <= 0, so any base too small to produce a positive
+// one-fifth (zero, negative, or simply tiny) floors to no jitter at all
+// rather than crashing the worker process — base itself is still the
+// dominant term in the caller's delay either way.
+func jitter(base time.Duration) time.Duration {
+	fifth := int64(base) / 5
+	if fifth <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(fifth))
 }
 
 // RetryDelayForTask dispatches to WebhookEventRetryDelay for "webhook:event"
