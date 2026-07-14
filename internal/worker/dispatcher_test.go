@@ -42,6 +42,21 @@ func (m *mockProvider) FetchMetrics(_ context.Context, _ json.RawMessage, _ stri
 
 func (m *mockProvider) ValidateConfig(_ json.RawMessage) error { return nil }
 
+// fakeWebhookEmitter is a hand-rolled test double for the dispatcher's
+// terminalEventEmitter dependency. It records every call so tests can assert
+// both "did it emit" and "did it emit with the right parameters" without a
+// live Asynq/Redis connection or a generated mock for a single-method
+// interface.
+type fakeWebhookEmitter struct {
+	calls []EmitParams
+	err   error
+}
+
+func (f *fakeWebhookEmitter) Emit(_ context.Context, params EmitParams) error {
+	f.calls = append(f.calls, params)
+	return f.err
+}
+
 // dispatcherTestFixture groups the mocks and dispatcher used across test cases
 // to reduce boilerplate. Each test constructs its own fixture so mock
 // expectations remain isolated.
@@ -52,6 +67,7 @@ type dispatcherTestFixture struct {
 	channelRepo *mocks.MockChannelConfigRepository
 	metricRepo  *mocks.MockDeliveryMetricRepository
 	registry    *provider.Registry
+	emitter     *fakeWebhookEmitter
 	dispatcher  *Dispatcher
 }
 
@@ -65,6 +81,7 @@ func newDispatcherFixture(t *testing.T) *dispatcherTestFixture {
 		channelRepo: mocks.NewMockChannelConfigRepository(ctrl),
 		metricRepo:  mocks.NewMockDeliveryMetricRepository(ctrl),
 		registry:    provider.NewRegistry(),
+		emitter:     &fakeWebhookEmitter{},
 	}
 	f.dispatcher = NewDispatcher(
 		f.registry,
@@ -72,6 +89,7 @@ func newDispatcherFixture(t *testing.T) *dispatcherTestFixture {
 		f.attemptRepo,
 		f.channelRepo,
 		f.metricRepo,
+		f.emitter,
 		zerolog.Nop(),
 	)
 	return f
@@ -497,4 +515,167 @@ func TestHandleNotificationDeliver_Success_NoProviderMsgID_SkipsMetric(t *testin
 	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
 
 	require.NoError(t, err)
+}
+
+func TestHandleNotificationDeliver_Success_EmitsDeliveredEvent(t *testing.T) {
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return &provider.SendResponse{Success: true}, nil
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).Return(nil)
+	f.channelRepo.EXPECT().GetByID(gomock.Any(), channelConfigID).Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	f.notifRepo.EXPECT().MarkDelivered(gomock.Any(), notifID).Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		TenantID:        tenantID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+		Metadata:        json.RawMessage(`{"order_id":"o-1"}`),
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.NoError(t, err)
+	require.Len(t, f.emitter.calls, 1, "exactly one emission for a successful delivery")
+	emitted := f.emitter.calls[0]
+	assert.Equal(t, tenantID, emitted.TenantID)
+	assert.Equal(t, notifID, emitted.NotificationID)
+	assert.Equal(t, channelConfigID, emitted.ChannelConfigID)
+	assert.Equal(t, "discord", emitted.Channel)
+	assert.Equal(t, domain.WebhookEventDelivered, emitted.EventType)
+	// First attempt (asynq retry count 0) succeeding: retry_count in the DB
+	// stays 0 since MarkDelivered never calls IncrementRetry, so the true
+	// attempt count for the event payload is retry_count+1 = 1.
+	assert.Equal(t, 1, emitted.Attempts)
+	assert.JSONEq(t, `{"order_id":"o-1"}`, string(emitted.Metadata))
+}
+
+func TestHandleNotificationDeliver_PermanentProviderFailure_EmitsFailedEvent(t *testing.T) {
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+	providerErrMsg := "smtp: authentication failed"
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return &provider.SendResponse{Success: false, Permanent: true, ErrorMessage: providerErrMsg}, nil
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).Return(nil)
+	f.channelRepo.EXPECT().GetByID(gomock.Any(), channelConfigID).Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	f.notifRepo.EXPECT().IncrementRetry(gomock.Any(), notifID, providerErrMsg).Return(nil)
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		TenantID:        tenantID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.Error(t, err)
+	require.Len(t, f.emitter.calls, 1, "exactly one emission for a first-attempt permanent failure")
+	emitted := f.emitter.calls[0]
+	assert.Equal(t, tenantID, emitted.TenantID)
+	assert.Equal(t, domain.WebhookEventFailed, emitted.EventType)
+	// First attempt (asynq retry count 0) failing permanently: IncrementRetry
+	// runs once for this attempt, so retry_count in the DB becomes 1 — the
+	// true attempt count is retry_count itself (unlike the delivered case,
+	// which needs +1 because MarkDelivered never increments).
+	assert.Equal(t, 1, emitted.Attempts)
+}
+
+func TestHandleNotificationDeliver_TransportError_DoesNotEmit(t *testing.T) {
+	// A transient transport failure moves the notification to "retrying",
+	// not a terminal state — no event may fire yet.
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+	transportErr := errors.New("connection refused")
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return nil, transportErr
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).Return(nil)
+	f.channelRepo.EXPECT().GetByID(gomock.Any(), channelConfigID).Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	f.notifRepo.EXPECT().IncrementRetry(gomock.Any(), notifID, transportErr.Error()).Return(nil)
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusRetrying, gomock.Any()).Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.Error(t, err)
+	assert.Empty(t, f.emitter.calls, "retrying is not a terminal state")
+}
+
+func TestHandleNotificationDeliver_TransientProviderFailure_DoesNotEmit(t *testing.T) {
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return &provider.SendResponse{Success: false, ErrorMessage: "rate limited"}, nil
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).Return(nil)
+	f.channelRepo.EXPECT().GetByID(gomock.Any(), channelConfigID).Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	f.notifRepo.EXPECT().IncrementRetry(gomock.Any(), notifID, "rate limited").Return(nil)
+	f.notifRepo.EXPECT().UpdateStatus(gomock.Any(), notifID, domain.StatusRetrying, gomock.Any()).Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.Error(t, err)
+	assert.Empty(t, f.emitter.calls, "a transient provider failure retries; it is not terminal")
 }

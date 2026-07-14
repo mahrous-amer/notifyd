@@ -14,12 +14,20 @@ import (
 	"github.com/bse/notifyd/internal/provider"
 )
 
+// terminalEventEmitter is the slice of *WebhookEventEmitter's behavior the
+// dispatcher depends on, defined as an interface so tests can substitute a
+// recording fake instead of a real endpoint repository and Asynq client.
+type terminalEventEmitter interface {
+	Emit(ctx context.Context, params EmitParams) error
+}
+
 type Dispatcher struct {
 	registry    *provider.Registry
 	notifRepo   domain.NotificationRepository
 	attemptRepo domain.DeliveryAttemptRepository
 	channelRepo domain.ChannelConfigRepository
 	metricRepo  domain.DeliveryMetricRepository
+	emitter     terminalEventEmitter
 	logger      zerolog.Logger
 }
 
@@ -29,6 +37,7 @@ func NewDispatcher(
 	attemptRepo domain.DeliveryAttemptRepository,
 	channelRepo domain.ChannelConfigRepository,
 	metricRepo domain.DeliveryMetricRepository,
+	emitter terminalEventEmitter,
 	logger zerolog.Logger,
 ) *Dispatcher {
 	return &Dispatcher{
@@ -37,6 +46,7 @@ func NewDispatcher(
 		attemptRepo: attemptRepo,
 		channelRepo: channelRepo,
 		metricRepo:  metricRepo,
+		emitter:     emitter,
 		logger:      logger,
 	}
 }
@@ -92,10 +102,10 @@ func (d *Dispatcher) HandleNotificationDeliver(ctx context.Context, t *asynq.Tas
 	}
 
 	if !resp.Success {
-		return d.handleProviderFailure(ctx, log, attempt, p.NotificationID, resp, durationMs)
+		return d.handleProviderFailure(ctx, log, attempt, p, resp, attemptNumber, durationMs)
 	}
 
-	d.recordSuccessfulDelivery(ctx, log, attempt, p.NotificationID, resp, durationMs)
+	d.recordSuccessfulDelivery(ctx, log, attempt, p, resp, attemptNumber, durationMs)
 	return nil
 }
 
@@ -154,8 +164,9 @@ func (d *Dispatcher) handleProviderFailure(
 	ctx context.Context,
 	log zerolog.Logger,
 	attempt *domain.DeliveryAttempt,
-	notifID uuid.UUID,
+	p NotificationDeliverPayload,
 	resp *provider.SendResponse,
+	attemptNumber int,
 	durationMs int,
 ) error {
 	attempt.Status = domain.AttemptFailure
@@ -167,13 +178,13 @@ func (d *Dispatcher) handleProviderFailure(
 	}
 
 	if resp.Permanent {
-		return d.handlePermanentProviderFailure(ctx, log, notifID, resp, durationMs)
+		return d.handlePermanentProviderFailure(ctx, log, p, resp, attemptNumber, durationMs)
 	}
 
-	if dbErr := d.notifRepo.IncrementRetry(ctx, notifID, resp.ErrorMessage); dbErr != nil {
+	if dbErr := d.notifRepo.IncrementRetry(ctx, p.NotificationID, resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to increment retry count")
 	}
-	if dbErr := d.notifRepo.UpdateStatus(ctx, notifID, domain.StatusRetrying, &resp.ErrorMessage); dbErr != nil {
+	if dbErr := d.notifRepo.UpdateStatus(ctx, p.NotificationID, domain.StatusRetrying, &resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to update notification status to retrying")
 	}
 
@@ -181,14 +192,22 @@ func (d *Dispatcher) handleProviderFailure(
 	return fmt.Errorf("provider error: %s", resp.ErrorMessage)
 }
 
-// handlePermanentProviderFailure marks a notification as permanently failed
-// and signals asynq to stop retrying. Used for provider errors that retrying
-// cannot fix, such as SMTP authentication failures or rejected recipients.
+// handlePermanentProviderFailure marks a notification as permanently failed,
+// emits the notification.failed webhook event, and signals asynq to stop
+// retrying. Used for provider errors that retrying cannot fix, such as SMTP
+// authentication failures or rejected recipients.
+//
+// This is the ONLY site that emits notification.failed for a SkipRetry-classified
+// failure — asynq's ErrorHandler (error_handler.go) is invoked for every
+// failed task including ones wrapping asynq.SkipRetry, so error_handler.go
+// must not also emit here or the same terminal transition would fire twice.
+// See error_handler.go's HandleError for the corresponding guard.
 func (d *Dispatcher) handlePermanentProviderFailure(
 	ctx context.Context,
 	log zerolog.Logger,
-	notifID uuid.UUID,
+	p NotificationDeliverPayload,
 	resp *provider.SendResponse,
+	attemptNumber int,
 	durationMs int,
 ) error {
 	// Still counts as one attempt even though it will never be retried, so
@@ -196,12 +215,19 @@ func (d *Dispatcher) handlePermanentProviderFailure(
 	// permanent failure leaves retry_count at 0 while delivery_attempts
 	// already has attempt_number 1, the same bookkeeping the retrying path
 	// keeps in sync.
-	if dbErr := d.notifRepo.IncrementRetry(ctx, notifID, resp.ErrorMessage); dbErr != nil {
+	if dbErr := d.notifRepo.IncrementRetry(ctx, p.NotificationID, resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to increment retry count")
 	}
-	if dbErr := d.notifRepo.UpdateStatus(ctx, notifID, domain.StatusFailed, &resp.ErrorMessage); dbErr != nil {
+	if dbErr := d.notifRepo.UpdateStatus(ctx, p.NotificationID, domain.StatusFailed, &resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to update notification status to failed")
 	}
+
+	// attemptNumber (asynq's own retry-count-derived counter, incremented
+	// once per Send() call including this one) equals notifyd's retry_count
+	// after the IncrementRetry call above: both count "how many attempts
+	// have happened so far, including this one" the same way. See EmitParams
+	// for the general rule this specializes.
+	d.emitTerminalEvent(ctx, log, p, domain.WebhookEventFailed, attemptNumber)
 
 	log.Warn().Str("error", resp.ErrorMessage).Int("duration_ms", durationMs).Msg("delivery failed permanently (provider)")
 	return fmt.Errorf("provider error: %s: %w", resp.ErrorMessage, asynq.SkipRetry)
@@ -211,8 +237,9 @@ func (d *Dispatcher) recordSuccessfulDelivery(
 	ctx context.Context,
 	log zerolog.Logger,
 	attempt *domain.DeliveryAttempt,
-	notifID uuid.UUID,
+	p NotificationDeliverPayload,
 	resp *provider.SendResponse,
+	attemptNumber int,
 	durationMs int,
 ) {
 	attempt.Status = domain.AttemptSuccess
@@ -221,18 +248,50 @@ func (d *Dispatcher) recordSuccessfulDelivery(
 	if dbErr := d.attemptRepo.Create(ctx, attempt); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to record delivery attempt")
 	}
-	if dbErr := d.notifRepo.MarkDelivered(ctx, notifID); dbErr != nil {
+	if dbErr := d.notifRepo.MarkDelivered(ctx, p.NotificationID); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to mark notification as delivered")
 	}
 
 	if resp.ProviderMsgID != "" {
-		if dbErr := d.notifRepo.SetProviderMsgID(ctx, notifID, resp.ProviderMsgID); dbErr != nil {
+		if dbErr := d.notifRepo.SetProviderMsgID(ctx, p.NotificationID, resp.ProviderMsgID); dbErr != nil {
 			log.Error().Err(dbErr).Msg("failed to store provider message ID")
 		}
-		d.createInitialDeliveryMetric(ctx, log, notifID, resp.ProviderMsgID)
+		d.createInitialDeliveryMetric(ctx, log, p.NotificationID, resp.ProviderMsgID)
 	}
 
+	// MarkDelivered never increments retry_count (unlike the failure paths),
+	// so attemptNumber — already "how many attempts happened, including this
+	// one" — is the true attempt count directly, with no adjustment needed.
+	d.emitTerminalEvent(ctx, log, p, domain.WebhookEventDelivered, attemptNumber)
+
 	log.Info().Int("duration_ms", durationMs).Msg("notification delivered")
+}
+
+// emitTerminalEvent fires the webhook status event for a terminal
+// transition. Errors are logged and swallowed, matching this file's
+// existing log-and-continue style for every other post-outcome side effect
+// (attempt recording, status updates, metric creation) — a webhook delivery
+// problem must never fail the notification delivery itself, which already
+// succeeded or permanently failed by the time this runs.
+func (d *Dispatcher) emitTerminalEvent(
+	ctx context.Context,
+	log zerolog.Logger,
+	p NotificationDeliverPayload,
+	eventType domain.WebhookEventType,
+	attempts int,
+) {
+	err := d.emitter.Emit(ctx, EmitParams{
+		TenantID:        p.TenantID,
+		NotificationID:  p.NotificationID,
+		ChannelConfigID: p.ChannelConfigID,
+		Channel:         p.ChannelType,
+		EventType:       eventType,
+		Attempts:        attempts,
+		Metadata:        p.Metadata,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("event_type", string(eventType)).Msg("failed to emit webhook status event")
+	}
 }
 
 // createInitialDeliveryMetric creates the first delivery metric record

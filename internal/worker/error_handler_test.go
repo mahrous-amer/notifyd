@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"github.com/bse/notifyd/internal/domain"
@@ -38,7 +40,7 @@ func TestNotifyErrorHandler_WhenRetriesExhausted_MarksNotificationFailed(t *test
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	notifID := uuid.New()
 	taskErr := errors.New("delivery timed out")
@@ -68,7 +70,7 @@ func TestNotifyErrorHandler_WhenRetriesExhausted_UpdateStatusFails_DoesNotPanic(
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	notifID := uuid.New()
 
@@ -89,7 +91,7 @@ func TestNotifyErrorHandler_InvalidPayload_DoesNotPanic(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	// A task whose payload is malformed JSON: json.Unmarshal will fail, so
 	// UpdateStatus must NOT be called. The handler must absorb the error silently.
@@ -140,7 +142,7 @@ func TestNotifyErrorHandler_LogsTaskTypeAndRetryInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	notifID := uuid.New()
 
@@ -156,4 +158,94 @@ func TestNotifyErrorHandler_LogsTaskTypeAndRetryInfo(t *testing.T) {
 	assert.NotPanics(t, func() {
 		handler.HandleError(context.Background(), task, errors.New("some error"))
 	})
+}
+
+// TestNotifyErrorHandler_WhenRetriesExhausted_EmitsFailedEvent verifies the
+// genuine retry-exhaustion path (the error does NOT wrap asynq.SkipRetry):
+// the dispatcher's transient-failure branches never call the emitter
+// themselves (see dispatcher_test.go's *_DoesNotEmit tests), so this is the
+// only place a notification.failed event fires when retries run out through
+// ordinary backoff rather than an immediate permanent classification.
+func TestNotifyErrorHandler_WhenRetriesExhausted_EmitsFailedEvent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	notifID := uuid.New()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+	taskErr := errors.New("delivery timed out")
+
+	notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeErrorHandlerTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		TenantID:        tenantID,
+		ChannelType:     "telegram",
+		ChannelConfigID: channelConfigID,
+	})
+
+	handler.HandleError(context.Background(), task, taskErr)
+
+	require.Len(t, emitter.calls, 1)
+	emitted := emitter.calls[0]
+	assert.Equal(t, tenantID, emitted.TenantID)
+	assert.Equal(t, notifID, emitted.NotificationID)
+	assert.Equal(t, channelConfigID, emitted.ChannelConfigID)
+	assert.Equal(t, "telegram", emitted.Channel)
+	assert.Equal(t, domain.WebhookEventFailed, emitted.EventType)
+}
+
+// TestNotifyErrorHandler_SkipRetryError_DoesNotEmit verifies the double-fire
+// guard: when the failing error wraps asynq.SkipRetry, the dispatcher's own
+// permanent-failure path (dispatcher.go's handlePermanentProviderFailure)
+// already emitted notification.failed before returning that error — asynq's
+// processor invokes errHandler.HandleError for every failed task
+// unconditionally, including ones wrapping SkipRetry, so this handler must
+// recognize that case and skip emitting again.
+func TestNotifyErrorHandler_SkipRetryError_DoesNotEmit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	notifID := uuid.New()
+	skipRetryErr := fmt.Errorf("provider error: rejected: %w", asynq.SkipRetry)
+
+	notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeErrorHandlerTask(NotificationDeliverPayload{NotificationID: notifID})
+
+	handler.HandleError(context.Background(), task, skipRetryErr)
+
+	assert.Empty(t, emitter.calls, "the dispatcher's permanent-failure path already emitted for this transition")
+}
+
+// TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotEmit documents that
+// the "retried < maxRetry" branch (not independently testable here — see
+// TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotUpdateStatus's
+// comment on why asynq's context keys can't be injected) never reaches the
+// emission call at all, since it lives inside the same `if retried >=
+// maxRetry` block as the existing UpdateStatus call. No separate test is
+// needed beyond that existing branch coverage.
+func TestNotifyErrorHandler_EmitterNotCalled_WhenPayloadInvalid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	badPayload := []byte("not-valid-json{{{")
+	task := asynq.NewTask(TypeNotificationDeliver, badPayload)
+
+	handler.HandleError(context.Background(), task, errors.New("some error"))
+
+	assert.Empty(t, emitter.calls)
 }
