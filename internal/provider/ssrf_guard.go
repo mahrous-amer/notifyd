@@ -8,9 +8,11 @@ import (
 )
 
 // errBlockedAddress is returned by the guarded dialer when a target address
-// resolves to a private, loopback, or link-local range. It is wrapped in the
-// error chain so callers can classify the resulting send as a permanent
-// failure: retrying can never reach a different address for the same host.
+// resolves to any range IsBlockedIP rejects — private, loopback, link-local,
+// CGNAT, an IETF special-use block, or the NAT64 well-known prefix. It is
+// wrapped in the error chain so callers can classify the resulting send as a
+// permanent failure: retrying can never reach a different address for the
+// same host.
 var errBlockedAddress = errors.New("refusing to connect to a private/internal address")
 
 // extraBlockedRanges lists CIDR blocks that net.IP's own IsLoopback /
