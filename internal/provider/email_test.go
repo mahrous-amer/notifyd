@@ -5,6 +5,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
+	"mime/quotedprintable"
 	"net"
 	"strconv"
 	"strings"
@@ -219,6 +222,34 @@ func newEmailProviderTrusting(t *testing.T, server *smtpTestServer) *provider.Em
 	return provider.NewEmailProviderWithTLSRootCAs(pool)
 }
 
+// extractHeaderValue returns the value portion of the given header (the text
+// after "Name: ") from a captured RFC 5322 message.
+func extractHeaderValue(t *testing.T, message, header string) string {
+	t.Helper()
+	prefix := header + ": "
+	for _, line := range strings.Split(message, "\r\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	t.Fatalf("header %q not found in message:\n%s", header, message)
+	return ""
+}
+
+// decodeQuotedPrintableBodyPart extracts the single-part message body (the
+// text after the blank line separating headers from content) and decodes it
+// as quoted-printable.
+func decodeQuotedPrintableBodyPart(t *testing.T, message string) string {
+	t.Helper()
+	_, body, found := strings.Cut(message, "\r\n\r\n")
+	require.True(t, found, "message must have a blank line separating headers from body")
+	body = strings.TrimSuffix(body, "\r\n")
+
+	decoded, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(body)))
+	require.NoError(t, err, "body must be valid quoted-printable")
+	return string(decoded)
+}
+
 func TestEmailProvider_Send_PlainFormatMode_SendsTextPlainOnly(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
@@ -282,6 +313,39 @@ func TestEmailProvider_Send_MarkdownFormatMode_SendsHTMLWithPlainAlternative(t *
 	// part should retain the raw markdown source as the fallback.
 	assert.Contains(t, data, "<strong>bold</strong>")
 	assert.Contains(t, data, "**bold** text")
+}
+
+func TestEmailProvider_Send_ArabicSubjectAndBody_EncodedForSafeTransit(t *testing.T) {
+	// Strict relays without 8BITMIME can mangle raw UTF-8 sent with an
+	// implicit 7bit transfer encoding. The subject must be a valid RFC 2047
+	// encoded word, and the body must declare and use quoted-printable so it
+	// survives transit and decodes back to the original text.
+	server := newSMTPTestServer(t)
+	host, port := hostPort(t, server.addr)
+
+	p := newEmailProviderTrusting(t, server)
+	cfg := newEmailConfig(validEmailConfigParams(host, port))
+	arabicSubject := "تنبيه هام"
+	arabicBody := "حدث خطأ في النظام، يرجى المراجعة فورا."
+	req := provider.SendRequest{Subject: arabicSubject, Body: arabicBody, FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), cfg, req)
+
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	data := server.capturedData()
+
+	subjectValue := extractHeaderValue(t, data, "Subject")
+	decodedSubject, err := (&mime.WordDecoder{}).DecodeHeader(subjectValue)
+	require.NoError(t, err, "subject must be a valid RFC 2047 encoded word")
+	assert.Equal(t, arabicSubject, decodedSubject)
+
+	assert.Contains(t, data, "Content-Transfer-Encoding: quoted-printable")
+	assert.NotContains(t, data, arabicBody, "raw UTF-8 body must not appear unencoded on the wire")
+
+	decodedBody := decodeQuotedPrintableBodyPart(t, data)
+	assert.Equal(t, arabicBody, decodedBody)
 }
 
 func TestEmailProvider_Send_DefaultFormatMode_TreatsAsPlain(t *testing.T) {

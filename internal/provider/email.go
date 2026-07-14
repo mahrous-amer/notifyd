@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -227,9 +228,18 @@ func buildEmailHeaders(cfg emailConfig, subject string) string {
 	return h.String()
 }
 
+// writeSinglePart writes a MIME part with the body quoted-printable encoded.
+// Raw UTF-8 sent with an implicit 7bit transfer encoding can be mangled by
+// strict relays that don't support 8BITMIME; quoted-printable survives any
+// relay that only understands ASCII.
 func writeSinglePart(buf *bytes.Buffer, contentType, body string) {
-	fmt.Fprintf(buf, "Content-Type: %s\r\n\r\n", contentType)
-	buf.WriteString(body)
+	fmt.Fprintf(buf, "Content-Type: %s\r\n", contentType)
+	buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+
+	qpWriter := quotedprintable.NewWriter(buf)
+	_, _ = qpWriter.Write([]byte(body)) // bytes.Buffer.Write never errors
+	_ = qpWriter.Close()
+
 	buf.WriteString("\r\n")
 }
 
