@@ -211,6 +211,60 @@ func TestHandleNotificationDeliver_ProviderFailure_SetsRetryingStatus(t *testing
 	assert.Contains(t, err.Error(), providerErrMsg)
 }
 
+func TestHandleNotificationDeliver_PermanentProviderFailure_SetsFailedStatusAndSkipsRetry(t *testing.T) {
+	f := newDispatcherFixture(t)
+
+	notifID := uuid.New()
+	channelConfigID := uuid.New()
+	channelCfg := makeChannelConfig(channelConfigID)
+	providerErrMsg := "smtp: authentication failed"
+
+	prov := &mockProvider{
+		typeName: "discord",
+		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+			return &provider.SendResponse{
+				Success:      false,
+				Permanent:    true,
+				ErrorMessage: providerErrMsg,
+			}, nil
+		},
+	}
+	f.registry.Register(prov)
+
+	f.notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusProcessing, gomock.Nil()).
+		Return(nil)
+	f.channelRepo.EXPECT().
+		GetByID(gomock.Any(), channelConfigID).
+		Return(channelCfg, nil)
+	f.attemptRepo.EXPECT().
+		Create(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, a *domain.DeliveryAttempt) error {
+			assert.Equal(t, domain.AttemptFailure, a.Status)
+			require.NotNil(t, a.ErrorMessage)
+			assert.Equal(t, providerErrMsg, *a.ErrorMessage)
+			return nil
+		})
+	// A permanent failure goes straight to StatusFailed, never StatusRetrying,
+	// and does not increment the retry counter.
+	f.notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		ChannelType:     "discord",
+		ChannelConfigID: channelConfigID,
+		Body:            "Hello",
+	})
+
+	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), providerErrMsg)
+	assert.True(t, errors.Is(err, asynq.SkipRetry), "permanent provider failures must not be retried")
+}
+
 func TestHandleNotificationDeliver_TransportError_IncrementsRetry(t *testing.T) {
 	f := newDispatcherFixture(t)
 

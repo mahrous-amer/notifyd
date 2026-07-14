@@ -31,9 +31,14 @@ type SendRequest struct {
 // SendResponse carries the outcome of a single delivery attempt.
 type SendResponse struct {
 	Success       bool
-	ProviderMsgID string          // provider-assigned message ID, used for metric polling
+	ProviderMsgID string // provider-assigned message ID, used for metric polling
 	ProviderData  json.RawMessage
 	ErrorMessage  string
+	// Permanent marks a failed send as one that will never succeed on retry
+	// (e.g. bad credentials, rejected recipient). The dispatcher skips further
+	// retry attempts and moves the notification straight to StatusFailed.
+	// Ignored when Success is true.
+	Permanent bool
 }
 
 // DeliveryMetrics holds the delivery and engagement data fetched from a provider
