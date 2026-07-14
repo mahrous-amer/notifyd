@@ -403,9 +403,12 @@ func TestEmailProvider_Send_PropagatesRecipients(t *testing.T) {
 	to := server.capturedTo()
 	assert.ElementsMatch(t, []string{"a@example.com", "b@example.com", "c@example.com"}, to)
 
+	// Headers carry the canonical form net/mail.Address.String() produces
+	// (angle-bracketed), since buildEmailHeaders re-parses and re-serializes
+	// every address rather than writing the config's raw strings verbatim.
 	data := server.capturedData()
-	assert.Contains(t, data, "To: a@example.com, b@example.com")
-	assert.Contains(t, data, "Cc: c@example.com")
+	assert.Contains(t, data, "To: <a@example.com>, <b@example.com>")
+	assert.Contains(t, data, "Cc: <c@example.com>")
 }
 
 func TestEmailProvider_Send_SetsReplyToHeader(t *testing.T) {
@@ -422,7 +425,80 @@ func TestEmailProvider_Send_SetsReplyToHeader(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, resp.Success)
-	assert.Contains(t, server.capturedData(), "Reply-To: support@example.com")
+	assert.Contains(t, server.capturedData(), "Reply-To: <support@example.com>")
+}
+
+func TestEmailProvider_Send_ReserializesAddressesToCanonicalForm(t *testing.T) {
+	// buildEmailHeaders re-parses cfg.From/To/Cc/ReplyTo with
+	// mail.ParseAddress and writes back Address.String() rather than the raw
+	// config strings, so a display name survives round-tripping in the
+	// standard RFC 5322 quoted form regardless of how the config JSON
+	// happened to format it.
+	server := newSMTPTestServer(t)
+	host, port := hostPort(t, server.addr)
+
+	p := newEmailProviderTrusting(t, server)
+	params := validEmailConfigParams(host, port)
+	params.From = "Ops Alerts <alerts@example.com>"
+	cfg := newEmailConfig(params)
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), cfg, req)
+
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+	assert.Contains(t, server.capturedData(), `From: "Ops Alerts" <alerts@example.com>`)
+
+	// The envelope-level MAIL FROM command needs the bare address — a
+	// display name inside the angle brackets would be a malformed SMTP
+	// command, not just a cosmetic header issue.
+	assert.Equal(t, "alerts@example.com", server.capturedFrom())
+}
+
+func TestEmailProvider_Send_UnparsableFromAddress_IsPermanentFailure(t *testing.T) {
+	// ValidateConfig should already reject this at channel-creation time;
+	// this covers the defense-in-depth path for a config that reached Send
+	// without going through ValidateConfig (e.g. a future write path that
+	// bypasses the service layer).
+	p := provider.NewEmailProvider()
+	rawCfg := json.RawMessage(`{
+		"host": "smtp.example.com",
+		"port": 587,
+		"username": "alerts@example.com",
+		"password": "hunter2",
+		"from": "not-an-email",
+		"to": ["ops@example.com"]
+	}`)
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), rawCfg, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.Success)
+	assert.True(t, resp.Permanent, "a malformed address cannot be fixed by retrying")
+	assert.Contains(t, resp.ErrorMessage, "from")
+}
+
+func TestEmailProvider_Send_UnparsableToAddress_IsPermanentFailure(t *testing.T) {
+	p := provider.NewEmailProvider()
+	rawCfg := json.RawMessage(`{
+		"host": "smtp.example.com",
+		"port": 587,
+		"username": "alerts@example.com",
+		"password": "hunter2",
+		"from": "alerts@example.com",
+		"to": ["not-an-email"]
+	}`)
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), rawCfg, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.Success)
+	assert.True(t, resp.Permanent)
+	assert.Contains(t, resp.ErrorMessage, "to")
 }
 
 func TestEmailProvider_Send_SetsDateHeader(t *testing.T) {

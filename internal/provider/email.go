@@ -147,7 +147,10 @@ func (e *EmailProvider) Send(ctx context.Context, rawConfig json.RawMessage, req
 		defer cancel()
 	}
 
-	message := buildEmailMessage(cfg, req)
+	message, err := buildEmailMessage(cfg, req)
+	if err != nil {
+		return classifyEmailSendError(err), nil
+	}
 
 	if err := sendViaSMTP(ctx, cfg, message, e.tlsRootCAs); err != nil {
 		return classifyEmailSendError(err), nil
@@ -177,6 +180,10 @@ func isPermanentSMTPError(err error) bool {
 	if errors.As(err, &protoErr) {
 		return protoErr.Code >= 500 && protoErr.Code < 600
 	}
+	var permErr *permanentEmailError
+	if errors.As(err, &permErr) {
+		return true
+	}
 	// Connection failures, DNS errors, transientSMTPError, and context
 	// deadline/cancellation are all transport-level problems that a later
 	// retry can plausibly resolve.
@@ -190,6 +197,14 @@ type transientSMTPError struct{ msg string }
 
 func (e *transientSMTPError) Error() string { return e.msg }
 
+// permanentEmailError marks a failure detected before any network I/O as
+// non-retryable, e.g. a config value that fails to re-parse as a valid
+// address at header-build time. Retrying without changing the config cannot
+// fix these.
+type permanentEmailError struct{ msg string }
+
+func (e *permanentEmailError) Error() string { return e.msg }
+
 // buildEmailMessage renders the full RFC 5322 message (headers + body) for
 // the given format mode:
 //   - "html": a single text/html part.
@@ -197,8 +212,13 @@ func (e *transientSMTPError) Error() string { return e.msg }
 //     markdown source kept as a text/plain alternative so plain-text mail
 //     clients still show readable content.
 //   - "plain" or unset: a single text/plain part.
-func buildEmailMessage(cfg emailConfig, req SendRequest) []byte {
-	headers := buildEmailHeaders(cfg, req.Subject)
+//
+// Returns a *permanentEmailError if any configured address fails to parse.
+func buildEmailMessage(cfg emailConfig, req SendRequest) ([]byte, error) {
+	headers, err := buildEmailHeaders(cfg, req.Subject)
+	if err != nil {
+		return nil, err
+	}
 
 	var buf bytes.Buffer
 	buf.WriteString(headers)
@@ -212,24 +232,79 @@ func buildEmailMessage(cfg emailConfig, req SendRequest) []byte {
 		writeSinglePart(&buf, "text/plain; charset=UTF-8", req.Body)
 	}
 
-	return buf.Bytes()
+	return buf.Bytes(), nil
 }
 
-func buildEmailHeaders(cfg emailConfig, subject string) string {
-	var h strings.Builder
-	fmt.Fprintf(&h, "From: %s\r\n", cfg.From)
-	fmt.Fprintf(&h, "To: %s\r\n", strings.Join(cfg.To, ", "))
-	if len(cfg.CC) > 0 {
-		fmt.Fprintf(&h, "Cc: %s\r\n", strings.Join(cfg.CC, ", "))
+// buildEmailHeaders re-parses every configured address with
+// mail.ParseAddress and writes back its canonical Address.String() form,
+// rather than trusting the config's raw strings. ValidateConfig already
+// gates every known write path with the same check, but re-validating here
+// removes the implicit coupling: a future write path that bypasses
+// ValidateConfig fails safely (a permanent error) instead of composing a
+// malformed message or silently mis-addressing mail.
+func buildEmailHeaders(cfg emailConfig, subject string) (string, error) {
+	from, err := parseAddressField("from", cfg.From)
+	if err != nil {
+		return "", err
 	}
+	to, err := parseAddressList("to", cfg.To)
+	if err != nil {
+		return "", err
+	}
+	cc, err := parseAddressList("cc", cfg.CC)
+	if err != nil {
+		return "", err
+	}
+	var replyTo *mail.Address
 	if cfg.ReplyTo != "" {
-		fmt.Fprintf(&h, "Reply-To: %s\r\n", cfg.ReplyTo)
+		replyTo, err = parseAddressField("reply_to", cfg.ReplyTo)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var h strings.Builder
+	fmt.Fprintf(&h, "From: %s\r\n", from.String())
+	fmt.Fprintf(&h, "To: %s\r\n", joinAddresses(to))
+	if len(cc) > 0 {
+		fmt.Fprintf(&h, "Cc: %s\r\n", joinAddresses(cc))
+	}
+	if replyTo != nil {
+		fmt.Fprintf(&h, "Reply-To: %s\r\n", replyTo.String())
 	}
 	fmt.Fprintf(&h, "Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", subject))
 	fmt.Fprintf(&h, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	fmt.Fprintf(&h, "Message-ID: %s\r\n", generateMessageID(cfg.From))
 	h.WriteString("MIME-Version: 1.0\r\n")
-	return h.String()
+	return h.String(), nil
+}
+
+func parseAddressField(field, raw string) (*mail.Address, error) {
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return nil, &permanentEmailError{msg: fmt.Sprintf("email message: %s: invalid address %q: %s", field, raw, err)}
+	}
+	return addr, nil
+}
+
+func parseAddressList(field string, raws []string) ([]*mail.Address, error) {
+	addrs := make([]*mail.Address, 0, len(raws))
+	for _, raw := range raws {
+		addr, err := parseAddressField(field, raw)
+		if err != nil {
+			return nil, err
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, nil
+}
+
+func joinAddresses(addrs []*mail.Address) string {
+	parts := make([]string, len(addrs))
+	for i, addr := range addrs {
+		parts[i] = addr.String()
+	}
+	return strings.Join(parts, ", ")
 }
 
 // generateMessageID builds an RFC 5322 Message-ID using a random local part
@@ -360,15 +435,31 @@ func dialWithContext(ctx context.Context, addr, host string, port int, rootCAs *
 	return conn, nil
 }
 
+// deliverMessage issues the SMTP envelope commands (MAIL FROM / RCPT TO) and
+// transfers message. The envelope commands need the bare user@domain form —
+// unlike message headers, a "Display Name <addr>" value here would be a
+// malformed SMTP command, not just a cosmetic difference — so addresses are
+// re-parsed and only the Address field is used. buildEmailMessage already
+// performs this same parse for the message headers; by the time Send reaches
+// here, cfg has already produced a valid message, so these calls are not
+// expected to fail on parsing.
 func deliverMessage(client *smtp.Client, cfg emailConfig, message []byte) error {
-	if err := client.Mail(cfg.From); err != nil {
+	from, err := parseAddressField("from", cfg.From)
+	if err != nil {
+		return err
+	}
+	if err := client.Mail(from.Address); err != nil {
 		return fmt.Errorf("mail from: %w", err)
 	}
 
 	recipients := append(append([]string{}, cfg.To...), cfg.CC...)
-	for _, rcpt := range recipients {
-		if err := client.Rcpt(rcpt); err != nil {
-			return fmt.Errorf("rcpt to %s: %w", rcpt, err)
+	for _, raw := range recipients {
+		rcpt, err := parseAddressField("recipient", raw)
+		if err != nil {
+			return err
+		}
+		if err := client.Rcpt(rcpt.Address); err != nil {
+			return fmt.Errorf("rcpt to %s: %w", rcpt.Address, err)
 		}
 	}
 

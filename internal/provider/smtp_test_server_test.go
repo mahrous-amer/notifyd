@@ -249,6 +249,12 @@ func (s *smtpTestServer) capturedTo() []string {
 	return append([]string(nil), s.lastTo...)
 }
 
+func (s *smtpTestServer) capturedFrom() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastFrom
+}
+
 // didAuthenticate reports whether the client issued an AUTH command before
 // sending mail.
 func (s *smtpTestServer) didAuthenticate() bool {
