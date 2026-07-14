@@ -51,6 +51,138 @@ func buildNotificationServiceFixture(t *testing.T) notificationServiceFixture {
 	}
 }
 
+// TestNotificationService_Send_EmailChannelWithEmptySubject_ReturnsValidationError
+// verifies that sending through an email channel config without a subject is
+// rejected before any notification row is created or task enqueued. Email
+// requires a subject; other channels do not.
+func TestNotificationService_Send_EmailChannelWithEmptySubject_ReturnsValidationError(t *testing.T) {
+	f := buildNotificationServiceFixture(t)
+	ctx := context.Background()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+
+	emailChannel := &domain.ChannelConfig{
+		ID:       channelConfigID,
+		TenantID: tenantID,
+		Channel:  domain.ChannelEmail,
+		IsActive: true,
+	}
+	f.channelRepo.EXPECT().GetByID(ctx, channelConfigID).Return(emailChannel, nil)
+
+	input := domain.SendNotificationInput{
+		ChannelConfigID: channelConfigID,
+		Body:            "Body without a subject",
+	}
+
+	notif, err := f.svc.Send(ctx, tenantID, input)
+
+	assert.Nil(t, notif)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrValidationFailed)
+	assert.Contains(t, err.Error(), "subject is required")
+}
+
+// TestNotificationService_Send_EmailChannelWithBlankSubject_ReturnsValidationError
+// verifies that a whitespace-only subject is treated the same as an absent one.
+func TestNotificationService_Send_EmailChannelWithBlankSubject_ReturnsValidationError(t *testing.T) {
+	f := buildNotificationServiceFixture(t)
+	ctx := context.Background()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+
+	emailChannel := &domain.ChannelConfig{
+		ID:       channelConfigID,
+		TenantID: tenantID,
+		Channel:  domain.ChannelEmail,
+		IsActive: true,
+	}
+	f.channelRepo.EXPECT().GetByID(ctx, channelConfigID).Return(emailChannel, nil)
+
+	blankSubject := "   "
+	input := domain.SendNotificationInput{
+		ChannelConfigID: channelConfigID,
+		Subject:         &blankSubject,
+		Body:            "Body with a blank subject",
+	}
+
+	notif, err := f.svc.Send(ctx, tenantID, input)
+
+	assert.Nil(t, notif)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrValidationFailed)
+}
+
+// TestNotificationService_Send_NonEmailChannelWithEmptySubject_SkipsSubjectValidation
+// verifies the subject requirement is specific to email: chat channels
+// (Discord here) proceed past validation with no subject at all. The
+// repository's Create call is forced to fail so the test observes that
+// validation was *not* the reason Send returned an error — proving the
+// subject check never ran for this channel type.
+func TestNotificationService_Send_NonEmailChannelWithEmptySubject_SkipsSubjectValidation(t *testing.T) {
+	f := buildNotificationServiceFixture(t)
+	ctx := context.Background()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+
+	discordChannel := &domain.ChannelConfig{
+		ID:       channelConfigID,
+		TenantID: tenantID,
+		Channel:  domain.ChannelDiscord,
+		IsActive: true,
+	}
+	f.channelRepo.EXPECT().GetByID(ctx, channelConfigID).Return(discordChannel, nil)
+
+	createErr := errors.New("stop before reaching the asynq enqueue call")
+	f.notifRepo.EXPECT().Create(ctx, gomock.Any()).Return(createErr)
+
+	input := domain.SendNotificationInput{
+		ChannelConfigID: channelConfigID,
+		Body:            "Body without a subject",
+	}
+
+	notif, err := f.svc.Send(ctx, tenantID, input)
+
+	assert.Nil(t, notif)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrValidationFailed)
+	assert.ErrorIs(t, err, createErr)
+}
+
+// TestNotificationService_Send_EmailChannelWithSubject_PassesValidation verifies
+// that a populated subject clears the email subject check and Send proceeds to
+// create the notification row.
+func TestNotificationService_Send_EmailChannelWithSubject_PassesValidation(t *testing.T) {
+	f := buildNotificationServiceFixture(t)
+	ctx := context.Background()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+
+	emailChannel := &domain.ChannelConfig{
+		ID:       channelConfigID,
+		TenantID: tenantID,
+		Channel:  domain.ChannelEmail,
+		IsActive: true,
+	}
+	f.channelRepo.EXPECT().GetByID(ctx, channelConfigID).Return(emailChannel, nil)
+
+	createErr := errors.New("stop before reaching the asynq enqueue call")
+	f.notifRepo.EXPECT().Create(ctx, gomock.Any()).Return(createErr)
+
+	subject := "Deployment complete"
+	input := domain.SendNotificationInput{
+		ChannelConfigID: channelConfigID,
+		Subject:         &subject,
+		Body:            "Body with a subject",
+	}
+
+	notif, err := f.svc.Send(ctx, tenantID, input)
+
+	assert.Nil(t, notif)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrValidationFailed)
+	assert.ErrorIs(t, err, createErr)
+}
+
 // TestNotificationService_GetByID_DelegatesToRepo verifies that GetByID
 // forwards the notification id to the repository and returns its response.
 func TestNotificationService_GetByID_DelegatesToRepo(t *testing.T) {
