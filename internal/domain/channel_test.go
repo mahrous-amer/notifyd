@@ -26,19 +26,29 @@ func TestIsValidChannelType(t *testing.T) {
 		assert.True(t, domain.IsValidChannelType(domain.ChannelEmail))
 	})
 
+	t.Run("accepts slack", func(t *testing.T) {
+		assert.True(t, domain.IsValidChannelType(domain.ChannelSlack))
+	})
+
+	t.Run("accepts webhook", func(t *testing.T) {
+		assert.True(t, domain.IsValidChannelType(domain.ChannelWebhook))
+	})
+
 	t.Run("rejects unknown type", func(t *testing.T) {
-		assert.False(t, domain.IsValidChannelType(domain.ChannelType("slack")))
+		assert.False(t, domain.IsValidChannelType(domain.ChannelType("carrier-pigeon")))
 	})
 }
 
 func TestValidChannelTypes(t *testing.T) {
 	types := domain.ValidChannelTypes()
 
-	require.Len(t, types, 4, "expected exactly four valid channel types")
+	require.Len(t, types, 6, "expected exactly six valid channel types")
 	assert.Contains(t, types, domain.ChannelDiscord)
 	assert.Contains(t, types, domain.ChannelTelegram)
 	assert.Contains(t, types, domain.ChannelWhatsApp)
 	assert.Contains(t, types, domain.ChannelEmail)
+	assert.Contains(t, types, domain.ChannelSlack)
+	assert.Contains(t, types, domain.ChannelWebhook)
 }
 
 func TestDeliveryPreferencesValidate(t *testing.T) {
