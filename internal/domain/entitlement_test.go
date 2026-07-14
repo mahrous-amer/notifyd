@@ -27,3 +27,14 @@ func TestFreeDefaults_AllowsEmail(t *testing.T) {
 	ent := FreeDefaults(uuid.New(), time.Now())
 	assert.True(t, ent.AllowsChannel(ChannelEmail))
 }
+
+// TestFreeDefaults_AllowsSlackAndWebhook verifies that Slack and generic
+// webhook are available on every plan including Free. Both are
+// customer-hosted delivery targets (a webhook URL the tenant already
+// controls) with no per-message cost to us, so there is no reason to gate
+// them behind a paid tier.
+func TestFreeDefaults_AllowsSlackAndWebhook(t *testing.T) {
+	ent := FreeDefaults(uuid.New(), time.Now())
+	assert.True(t, ent.AllowsChannel(ChannelSlack))
+	assert.True(t, ent.AllowsChannel(ChannelWebhook))
+}

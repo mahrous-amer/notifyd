@@ -1024,6 +1024,8 @@ components:
         - telegram
         - whatsapp
         - email
+        - slack
+        - webhook
 
     DeliveryPreferences:
       type: object
@@ -1066,7 +1068,9 @@ components:
             Provider-specific configuration object. Structure varies by channel type:
             discord takes { webhook_url }; telegram takes { bot_token, chat_id };
             whatsapp takes { phone_number_id, access_token, recipient }; email takes
-            the shape described by EmailChannelConfig.
+            the shape described by EmailChannelConfig; slack takes the shape
+            described by SlackChannelConfig; webhook takes the shape described
+            by WebhookChannelConfig.
         is_active:
           type: boolean
         delivery_prefs:
@@ -1162,6 +1166,56 @@ components:
           format: email
           description: Optional Reply-To address.
 
+    SlackChannelConfig:
+      type: object
+      description: >-
+        Config shape for channel type "slack". Uses a Slack incoming
+        webhook created in the target workspace; no OAuth app or bot-token
+        scopes are required.
+      required:
+        - webhook_url
+      properties:
+        webhook_url:
+          type: string
+          format: uri
+          description: >-
+            Must start with https://hooks.slack.com/. Created from the
+            target Slack workspace's "Incoming Webhooks" app settings.
+          example: https://hooks.slack.com/services/T00/B00/xxx
+
+    WebhookChannelConfig:
+      type: object
+      description: >-
+        Config shape for channel type "webhook". Posts a JSON payload to
+        any HTTPS endpoint the tenant controls — PagerDuty, Mattermost,
+        ntfy, or a customer-internal system. Requests to private,
+        loopback, and link-local addresses are refused at send time.
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Destination endpoint. Must use https.
+          example: https://example.com/hooks/notifyd
+        secret:
+          type: string
+          description: >-
+            Optional. When set, every request is signed: X-Notifyd-Signature
+            carries sha256=<hex hmac> computed over "<timestamp>.<raw body>",
+            and X-Notifyd-Timestamp carries the Unix timestamp used in that
+            computation. Stored only in channel_configs.config; never
+            returned by the API.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Optional custom headers sent with every request. Host,
+            Authorization (when secret is set), and any header matching
+            X-Notifyd-* (reserved for this provider's own signature
+            headers) are rejected by ValidateConfig.
+
     # -------------------------------------------------------------------------
     # Notifications
     # -------------------------------------------------------------------------
@@ -1229,9 +1283,9 @@ components:
         subject:
           type: string
           description: >-
-            Optional for chat channels (discord, telegram, whatsapp). Required
-            and must be non-blank when the target channel is email — a 400 is
-            returned otherwise.
+            Optional for chat and webhook channels (discord, telegram,
+            whatsapp, slack, webhook). Required and must be non-blank when
+            the target channel is email — a 400 is returned otherwise.
         body:
           type: string
         metadata:

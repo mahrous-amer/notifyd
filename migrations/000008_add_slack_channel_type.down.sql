@@ -1,0 +1,4 @@
+-- No-op: Postgres does not support removing a value from an enum type.
+-- Reverting this migration would require recreating channel_type without
+-- 'slack' and rewriting every dependent column, which is unsafe to automate
+-- in a down migration. If a rollback is ever required, handle it manually.

@@ -103,9 +103,11 @@ func TestHandleNotificationDeliver_Success(t *testing.T) {
 
 	channelCfg := makeChannelConfig(channelConfigID)
 
+	var capturedReq provider.SendRequest
 	prov := &mockProvider{
 		typeName: "discord",
-		sendFunc: func(_ context.Context, _ json.RawMessage, _ provider.SendRequest) (*provider.SendResponse, error) {
+		sendFunc: func(_ context.Context, _ json.RawMessage, req provider.SendRequest) (*provider.SendResponse, error) {
+			capturedReq = req
 			return &provider.SendResponse{
 				Success:       true,
 				ProviderMsgID: providerMsgID,
@@ -155,6 +157,10 @@ func TestHandleNotificationDeliver_Success(t *testing.T) {
 	err := f.dispatcher.HandleNotificationDeliver(context.Background(), task)
 
 	require.NoError(t, err)
+	// The webhook provider needs the notification ID in its outgoing payload
+	// for receivers to deduplicate/correlate deliveries; the dispatcher must
+	// carry it from the task payload into the provider's SendRequest.
+	assert.Equal(t, notifID, capturedReq.NotificationID)
 }
 
 func TestHandleNotificationDeliver_ProviderFailure_SetsRetryingStatus(t *testing.T) {

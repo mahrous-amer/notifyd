@@ -1,6 +1,6 @@
 # notifyd
 
-notifyd is a multi-tenant notification delivery service written in Go. It receives notification requests via a REST API, routes them to third-party messaging channels (Discord, Telegram, WhatsApp, email), and guarantees delivery through a Redis-backed queue with automatic retries and exponential backoff.
+notifyd is a multi-tenant notification delivery service written in Go. It receives notification requests via a REST API, routes them to third-party messaging channels (Discord, Slack, Telegram, WhatsApp, email, generic webhooks), and guarantees delivery through a Redis-backed queue with automatic retries and exponential backoff.
 
 ---
 
@@ -33,7 +33,7 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 - **Multi-tenant** — each tenant has its own API key, API secret, and isolated channel configurations.
 - **JWT authentication** — tenants exchange their API key and secret for a short-lived JWT. All protected endpoints require a valid bearer token.
 - **Admin authentication** — separate admin API key/secret for tenant management endpoints.
-- **Four delivery channels** — Discord (webhook), Telegram (Bot API), WhatsApp (Meta Cloud API), and email (bring-your-own SMTP).
+- **Six delivery channels** — Discord (webhook), Slack (incoming webhook), Telegram (Bot API), WhatsApp (Meta Cloud API), email (bring-your-own SMTP), and a generic webhook (POST JSON to any HTTPS endpoint you control, with HMAC signing and an SSRF guard).
 - **Guaranteed delivery** — notifications are enqueued in Redis via [Asynq](https://github.com/hibiken/asynq). The worker processes them asynchronously, independent of the API server.
 - **Exponential backoff retries** — failed deliveries are retried automatically up to a configurable maximum. Permanently failed tasks move to Asynq's dead letter queue.
 - **Delivery attempt tracking** — every attempt (success or failure) is recorded in PostgreSQL with timing, HTTP response data, and error messages.
@@ -353,6 +353,32 @@ curl -s -X POST https://notifyd.fluxintek.com/channels \
       "to": ["ops@example.com"]
     }
   }'
+
+# Slack (incoming webhook)
+curl -s -X POST https://notifyd.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "slack",
+    "name": "team-alerts",
+    "config": {
+      "webhook_url": "https://hooks.slack.com/services/T00/B00/xxx"
+    }
+  }'
+
+# Generic webhook
+curl -s -X POST https://notifyd.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "webhook",
+    "name": "pagerduty-events",
+    "config": {
+      "url": "https://example.com/hooks/notifyd",
+      "secret": "a-shared-signing-secret",
+      "headers": {"X-Tenant-Id": "acme-corp"}
+    }
+  }'
 ```
 
 Optional delivery preferences:
@@ -496,7 +522,7 @@ curl -s "https://notifyd.fluxintek.com/notifications?status=failed&channel=disco
 | `limit` | int | 20 | Page size (1–100) |
 | `offset` | int | 0 | Pagination offset |
 | `status` | string | — | `pending`, `processing`, `delivered`, `retrying`, `failed` |
-| `channel` | string | — | `telegram`, `discord`, `whatsapp`, `email` |
+| `channel` | string | — | `telegram`, `discord`, `whatsapp`, `email`, `slack`, `webhook` |
 
 #### GET /notifications/{id}
 
@@ -746,6 +772,64 @@ Bring-your-own SMTP: mail is sent from the customer's own domain using their own
 | `reply_to` | No | Optional `Reply-To` address |
 
 `subject` is required for email sends (empty or blank returns `400`). `format_mode` controls the MIME body: `plain` sends `text/plain`, `html` sends `text/html`, and `markdown` renders to `text/html` with the original markdown kept as a `text/plain` alternative part.
+
+### Slack
+
+Uses a Slack incoming webhook, created from the target workspace's "Incoming Webhooks" app settings. No OAuth app or bot-token scopes are needed.
+
+```json
+{
+  "webhook_url": "https://hooks.slack.com/services/T00/B00/xxx"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `webhook_url` | Yes | Must start with `https://hooks.slack.com/` |
+
+If `subject` is provided it is prepended as a bold first line. `format_mode: markdown` converts a CommonMark subset (bold, italic, inline code, links) to Slack's mrkdwn syntax; `plain` sends the body as-is. `format_mode: html` is rejected — Slack webhooks have no HTML rendering mode.
+
+### Webhook
+
+Posts a JSON payload to any HTTPS endpoint you control — PagerDuty, Mattermost, ntfy, or a customer-internal system.
+
+```json
+{
+  "url": "https://example.com/hooks/notifyd",
+  "secret": "a-shared-signing-secret",
+  "headers": {"X-Tenant-Id": "acme-corp"}
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | Yes | Destination endpoint. Must use `https` |
+| `secret` | No | When set, requests are signed (see below) |
+| `headers` | No | Extra headers sent with every request. `Host`, `Authorization` (when `secret` is set), and any `X-Notifyd-*` header are rejected — the last is reserved for the signature headers below |
+
+Every request POSTs this body:
+
+```json
+{
+  "notification_id": "…",
+  "subject": "…",
+  "body": "…",
+  "format": "markdown",
+  "metadata": {},
+  "sent_at": "2026-07-14T12:00:00Z"
+}
+```
+
+When `secret` is set, the request also carries:
+
+| Header | Description |
+|---|---|
+| `X-Notifyd-Timestamp` | Unix timestamp used in the signature below |
+| `X-Notifyd-Signature` | `sha256=<hex hmac>`, computed as HMAC-SHA256 over `"<timestamp>.<raw body>"` using `secret` as the key |
+
+Verify it the same way: recompute the HMAC over the timestamp, a literal `.`, and the exact raw request body, and compare against the header. Reject requests with a timestamp too far in the past to guard against replay.
+
+**SSRF protection:** every dial resolves the target host and refuses private, loopback, and link-local addresses (RFC 1918, RFC 4193, `127.0.0.0/8`, `169.254.0.0/16`, and their IPv6 equivalents), validated against the resolved address at connect time rather than the hostname up front, so a DNS record that changes after validation can't smuggle a request through. Redirects are never followed.
 
 ---
 
@@ -1025,7 +1109,7 @@ notifyd/
 │   ├── config/           # Environment-based configuration
 │   ├── domain/           # Core types, interfaces, errors, status constants
 │   ├── handler/          # HTTP handlers (auth, channel, notification, tenant, health)
-│   ├── provider/         # Channel providers (Discord, Telegram, WhatsApp, Email)
+│   ├── provider/         # Channel providers (Discord, Telegram, WhatsApp, Email, Slack, Webhook)
 │   ├── repository/       # PostgreSQL repository implementations
 │   ├── router/           # Chi router wiring
 │   ├── service/          # Business logic (tenant, channel, notification)
