@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Capability names a feature that a provider may or may not support.
@@ -22,10 +24,14 @@ type ProviderCapabilities struct {
 
 // SendRequest carries the message content to be delivered by a provider.
 type SendRequest struct {
-	Subject    string
-	Body       string
-	Metadata   json.RawMessage
-	FormatMode string // "plain", "markdown", or "html" — provider may use this to apply formatting
+	// NotificationID identifies the notification being delivered. Most
+	// providers ignore it; the webhook provider includes it in its JSON
+	// payload so receivers can deduplicate and correlate deliveries.
+	NotificationID uuid.UUID
+	Subject        string
+	Body           string
+	Metadata       json.RawMessage
+	FormatMode     string // "plain", "markdown", or "html" — provider may use this to apply formatting
 }
 
 // SendResponse carries the outcome of a single delivery attempt.

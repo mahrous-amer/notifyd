@@ -103,9 +103,10 @@ func (d *Dispatcher) HandleNotificationDeliver(ctx context.Context, t *asynq.Tas
 // mode from delivery preferences when specified.
 func (d *Dispatcher) buildSendRequest(p NotificationDeliverPayload, channelCfg *domain.ChannelConfig) provider.SendRequest {
 	req := provider.SendRequest{
-		Subject:  p.Subject,
-		Body:     p.Body,
-		Metadata: p.Metadata,
+		NotificationID: p.NotificationID,
+		Subject:        p.Subject,
+		Body:           p.Body,
+		Metadata:       p.Metadata,
 	}
 
 	// Merge delivery preferences from the channel config (the authoritative
