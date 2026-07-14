@@ -24,6 +24,16 @@ func NewPgWebhookEndpointRepo(pool *pgxpool.Pool) *PgWebhookEndpointRepo {
 // below limit, returning ErrWebhookLimitReached otherwise. Mirrors
 // PgAPIKeyRepo.CreateWithinLimit: locking the tenant row serializes concurrent
 // creates for the same tenant so the count-then-insert cannot race.
+//
+// The FOR UPDATE lock is taken on the same tenants row PgAPIKeyRepo's
+// CreateWithinLimit locks for API key creation — a deliberate coupling, not
+// an accident: both are "check a per-tenant cap, then insert" operations
+// serialized by locking the same parent row, so a concurrent webhook-endpoint
+// create and API-key create for the same tenant simply queue behind each
+// other rather than racing. This is fine at human-driven creation rates
+// (a tenant clicking "add endpoint" a few times a day); it would become a
+// contention point only if either operation started happening at a rate
+// this design never anticipated.
 func (r *PgWebhookEndpointRepo) CreateWithinLimit(ctx context.Context, e *domain.WebhookEndpoint, limit int) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
