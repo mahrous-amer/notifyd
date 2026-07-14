@@ -9,6 +9,19 @@ import (
 	"github.com/hibiken/asynq"
 )
 
+// webhookEventMinRetryDelay and webhookEventMaxRetryDelay define the
+// exponential backoff curve WebhookEventRetryDelay uses. Doubling from 2min
+// and capping at 2h spans roughly six hours (~21960s, ignoring jitter) over
+// webhookEventMaxRetry attempts, per the design doc's "up to 8 attempts over
+// ~6h" — deliberately independent of the "notification:deliver" queue's own
+// MinRetryDelay/MaxRetryDelay config (see cmd/worker/main.go's retryDelay),
+// since a customer's webhook receiver recovering from an outage operates on
+// a much longer timescale than a single provider API being flaky.
+const (
+	webhookEventMinRetryDelay = 2 * time.Minute
+	webhookEventMaxRetryDelay = 2 * time.Hour
+)
+
 const TypeWebhookEvent = "webhook:event"
 
 // queueWebhooks is a dedicated, lowest-priority Asynq queue for status-event
