@@ -201,6 +201,50 @@ func TestWebhookEventEmitter_Emit_EventPayloadShape(t *testing.T) {
 	assert.False(t, captured.Event.CreatedAt.IsZero())
 }
 
+// TestWebhookEventEmitter_Emit_NoMetadata_DefaultsToEmptyObject verifies the
+// event payload matches the generic-webhook channel provider's convention
+// (see buildWebhookPayload in provider/webhook.go) and the design doc's
+// promised shape: a notification sent with no metadata still produces a
+// literal "metadata": {} in the delivered JSON body, not a missing field or
+// a JSON null — so receivers can always safely index into data.metadata
+// without a nil check.
+func TestWebhookEventEmitter_Emit_NoMetadata_DefaultsToEmptyObject(t *testing.T) {
+	_, endpointRepo, _, _ := newEmitterFixture(t)
+	tenantID := uuid.New()
+	endpoint := activeEndpoint(tenantID, "notification.delivered")
+
+	endpointRepo.EXPECT().
+		ListActiveByTenantAndEvent(gomock.Any(), tenantID, domain.WebhookEventDelivered).
+		Return([]*domain.WebhookEndpoint{endpoint}, nil)
+
+	var captured WebhookEventTaskPayload
+	capturingEnqueuer := enqueuerFunc(func(p WebhookEventTaskPayload) error {
+		captured = p
+		return nil
+	})
+	emitter := NewWebhookEventEmitter(endpointRepo, capturingEnqueuer, zerolog.Nop())
+
+	err := emitter.Emit(context.Background(), EmitParams{
+		TenantID:        tenantID,
+		NotificationID:  uuid.New(),
+		ChannelConfigID: uuid.New(),
+		Channel:         "telegram",
+		EventType:       domain.WebhookEventDelivered,
+		Attempts:        1,
+		Metadata:        nil,
+	})
+	require.NoError(t, err)
+
+	encoded, err := json.Marshal(captured.Event)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	data, ok := decoded["data"].(map[string]any)
+	require.True(t, ok, "data field must be present")
+	assert.Equal(t, map[string]any{}, data["metadata"], "metadata must serialize as an empty object, not be omitted or null")
+}
+
 // enqueuerFunc adapts a plain function to the taskEnqueuer interface, the
 // same "function as test double" style dispatcher_test.go uses for
 // mockProvider.

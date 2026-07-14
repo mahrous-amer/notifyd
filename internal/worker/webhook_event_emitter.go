@@ -100,10 +100,21 @@ func buildWebhookEventTaskPayload(endpointID uuid.UUID, params EmitParams) Webho
 				Channel:         params.Channel,
 				Status:          eventStatusForType(params.EventType),
 				Attempts:        params.Attempts,
-				Metadata:        params.Metadata,
+				Metadata:        defaultMetadata(params.Metadata),
 			},
 		},
 	}
+}
+
+// defaultMetadata returns an empty JSON object when metadata is nil, so the
+// delivered payload's "metadata" field is always present and always valid
+// JSON — matching provider/webhook.go's buildWebhookPayload, which applies
+// the identical default for the generic-webhook channel's content payload.
+func defaultMetadata(metadata json.RawMessage) json.RawMessage {
+	if metadata == nil {
+		return json.RawMessage("{}")
+	}
+	return metadata
 }
 
 // webhookEventNamespace is a fixed, arbitrary UUID used as the namespace

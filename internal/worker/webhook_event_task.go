@@ -40,13 +40,20 @@ const webhookEventMaxRetry = 8
 
 // WebhookEventData is the "data" object inside a delivered webhook-event
 // payload. Field shapes mirror the design doc's example payload exactly.
+//
+// Metadata has no omitempty: buildWebhookEventTaskPayload always fills a nil
+// Metadata with an empty JSON object before this struct is marshaled (see
+// buildWebhookPayload in provider/webhook.go for the same convention on the
+// generic-webhook channel), so every delivered event has a literal
+// "metadata": {} a receiver can index into without a nil check, never an
+// omitted field or a JSON null.
 type WebhookEventData struct {
 	NotificationID  uuid.UUID       `json:"notification_id"`
 	ChannelConfigID uuid.UUID       `json:"channel_config_id"`
 	Channel         string          `json:"channel"`
 	Status          string          `json:"status"`
 	Attempts        int             `json:"attempts"`
-	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Metadata        json.RawMessage `json:"metadata"`
 }
 
 // WebhookEventPayload is the exact JSON body POSTed to a tenant's webhook
