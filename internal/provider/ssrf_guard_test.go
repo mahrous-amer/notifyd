@@ -49,6 +49,34 @@ func TestIsBlockedIP(t *testing.T) {
 		// IPv4-mapped IPv6 addresses of private ranges must still be caught.
 		{"IPv4-mapped IPv6 loopback", "::ffff:127.0.0.1", true},
 		{"IPv4-mapped IPv6 private", "::ffff:10.0.0.1", true},
+
+		// CGNAT (RFC 6598, 100.64.0.0/10) — used by cloud providers and ISPs
+		// for carrier-grade NAT; routes to infrastructure the tenant does not
+		// own, same threat model as RFC 1918 space.
+		{"CGNAT 100.64/10 start", "100.64.0.1", true},
+		{"CGNAT 100.64/10 end", "100.127.255.255", true},
+		{"just below CGNAT range", "100.63.255.255", false},
+		{"just above CGNAT range", "100.128.0.1", false},
+
+		// IETF special-use blocks (RFC 5737 docs, RFC 2544 benchmarking,
+		// RFC 1122 "this host on this network") that IsPrivate/IsLoopback/
+		// IsLinkLocalUnicast do not classify but which have no legitimate use
+		// as a webhook destination.
+		{"192.0.0.0/24 (IETF protocol assignments)", "192.0.0.1", true},
+		{"192.0.2.0/24 (RFC 5737 TEST-NET-1 docs)", "192.0.2.1", true},
+		{"198.18.0.0/15 start (RFC 2544 benchmarking)", "198.18.0.1", true},
+		{"198.18.0.0/15 end (RFC 2544 benchmarking)", "198.19.255.255", true},
+		{"just above 198.18.0.0/15", "198.20.0.1", false},
+		{"240.0.0.0/4 (reserved/future use)", "240.0.0.1", true},
+		{"240.0.0.0/4 end", "255.255.255.254", true},
+
+		// NAT64 well-known prefix (RFC 6052, 64:ff9b::/96) embeds an IPv4
+		// address in the low 32 bits; a NAT64 gateway would translate
+		// 64:ff9b::a9fe:a9fe back to the 169.254.169.254 metadata address,
+		// so the prefix itself must be blocked regardless of what IPv4
+		// address it embeds.
+		{"NAT64 well-known prefix embedding private IPv4", "64:ff9b::a9fe:a9fe", true},
+		{"NAT64 well-known prefix embedding public IPv4", "64:ff9b::808:808", true},
 	}
 
 	for _, tt := range tests {

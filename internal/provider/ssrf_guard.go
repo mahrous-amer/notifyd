@@ -13,6 +13,52 @@ import (
 // failure: retrying can never reach a different address for the same host.
 var errBlockedAddress = errors.New("refusing to connect to a private/internal address")
 
+// extraBlockedRanges lists CIDR blocks that net.IP's own IsLoopback /
+// IsLinkLocalUnicast / IsPrivate / IsUnspecified / IsMulticast methods do not
+// classify, but which still route to infrastructure a webhook tenant does
+// not own, or (for the IETF special-use blocks) have no legitimate use as a
+// webhook destination:
+//
+//   - 100.64.0.0/10  — RFC 6598 carrier-grade NAT (CGNAT). Cloud providers
+//     and ISPs use this range for infrastructure shared across tenants;
+//     same threat model as RFC 1918 space.
+//   - 192.0.0.0/24   — RFC 6890 IETF protocol assignments.
+//   - 192.0.2.0/24   — RFC 5737 TEST-NET-1, documentation-only space.
+//   - 198.18.0.0/15  — RFC 2544 inter-network benchmarking.
+//   - 240.0.0.0/4    — reserved for future use (includes the former
+//     255.255.255.255 broadcast-adjacent space).
+//   - 64:ff9b::/96   — RFC 6052 NAT64 well-known prefix. A NAT64 gateway
+//     translates addresses in this range by embedding an IPv4 address in
+//     the low 32 bits (e.g. 64:ff9b::a9fe:a9fe embeds 169.254.169.254), so
+//     the prefix itself must be blocked regardless of which IPv4 address it
+//     embeds — checking the embedded address separately would require
+//     unwrapping NAT64 on every lookup and still miss embedded addresses
+//     this list doesn't already cover.
+var extraBlockedRanges = mustParseCIDRs(
+	"100.64.0.0/10",
+	"192.0.0.0/24",
+	"192.0.2.0/24",
+	"198.18.0.0/15",
+	"240.0.0.0/4",
+	"64:ff9b::/96",
+)
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, len(cidrs))
+	for i, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// Every entry above is a fixed, compile-time-known literal;
+			// a parse failure here means extraBlockedRanges itself is
+			// malformed, which is a programming error, not a runtime
+			// condition callers can recover from.
+			panic(fmt.Sprintf("ssrf guard: invalid CIDR literal %q: %v", cidr, err))
+		}
+		nets[i] = ipNet
+	}
+	return nets
+}
+
 // IsBlockedIP reports whether ip falls in a range the webhook provider must
 // never connect to. The generic webhook provider is an HTTP client to
 // arbitrary tenant-supplied URLs; without this guard a tenant could use a
@@ -26,16 +72,26 @@ var errBlockedAddress = errors.New("refusing to connect to a private/internal ad
 //   - unspecified (0.0.0.0, ::) and multicast, which have no legitimate
 //     use as a webhook destination and are rejected as a side effect of
 //     using net.IP's own classification methods.
+//   - CGNAT, IETF special-use blocks, and the NAT64 well-known prefix —
+//     see extraBlockedRanges for the full list and rationale.
 //
 // Exported for direct table-driven testing of the classification rules,
 // independent of DNS resolution or a live dial.
 func IsBlockedIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
+	if ip.IsLoopback() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
 		ip.IsPrivate() ||
 		ip.IsUnspecified() ||
-		ip.IsMulticast()
+		ip.IsMulticast() {
+		return true
+	}
+	for _, blocked := range extraBlockedRanges {
+		if blocked.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // guardedDialContext returns a DialContext function that validates the
