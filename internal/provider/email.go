@@ -3,8 +3,10 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,8 +226,36 @@ func buildEmailHeaders(cfg emailConfig, subject string) string {
 		fmt.Fprintf(&h, "Reply-To: %s\r\n", cfg.ReplyTo)
 	}
 	fmt.Fprintf(&h, "Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", subject))
+	fmt.Fprintf(&h, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
+	fmt.Fprintf(&h, "Message-ID: %s\r\n", generateMessageID(cfg.From))
 	h.WriteString("MIME-Version: 1.0\r\n")
 	return h.String()
+}
+
+// generateMessageID builds an RFC 5322 Message-ID using a random local part
+// and the domain of the From address, so every send gets a globally unique
+// identifier without depending on any external ID service. Missing readers
+// see a well-formed "@notifyd.invalid" fallback rather than a malformed
+// header if fromAddress has no "@" (ValidateConfig should already have
+// rejected that config, so this only guards against a future caller that
+// bypasses validation).
+func generateMessageID(fromAddress string) string {
+	domain := "notifyd.invalid"
+	if _, after, found := strings.Cut(fromAddress, "@"); found && after != "" {
+		domain = after
+	}
+	return fmt.Sprintf("<%s@%s>", randomHexID(16), domain)
+}
+
+// randomHexID returns n random bytes hex-encoded. Falls back to a
+// timestamp-based value in the extremely unlikely case the system CSPRNG is
+// unavailable, so message construction never fails outright over an ID.
+func randomHexID(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
 }
 
 // writeSinglePart writes a MIME part with the body quoted-printable encoded.

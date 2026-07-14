@@ -9,6 +9,7 @@ import (
 	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"strconv"
 	"strings"
 	"testing"
@@ -422,6 +423,70 @@ func TestEmailProvider_Send_SetsReplyToHeader(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Success)
 	assert.Contains(t, server.capturedData(), "Reply-To: support@example.com")
+}
+
+func TestEmailProvider_Send_SetsDateHeader(t *testing.T) {
+	server := newSMTPTestServer(t)
+	host, port := hostPort(t, server.addr)
+
+	p := newEmailProviderTrusting(t, server)
+	cfg := newEmailConfig(validEmailConfigParams(host, port))
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	before := time.Now().Add(-time.Minute)
+	resp, err := p.Send(context.Background(), cfg, req)
+	after := time.Now().Add(time.Minute)
+
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	dateValue := extractHeaderValue(t, server.capturedData(), "Date")
+	parsed, err := mail.ParseDate(dateValue)
+	require.NoError(t, err, "Date header must be a valid RFC 5322 date")
+	assert.True(t, parsed.After(before) && parsed.Before(after), "Date must reflect the time of sending")
+}
+
+func TestEmailProvider_Send_SetsMessageIDHeader(t *testing.T) {
+	server := newSMTPTestServer(t)
+	host, port := hostPort(t, server.addr)
+
+	p := newEmailProviderTrusting(t, server)
+	cfg := newEmailConfig(validEmailConfigParams(host, port))
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), cfg, req)
+
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+
+	messageID := extractHeaderValue(t, server.capturedData(), "Message-ID")
+	require.True(t, strings.HasPrefix(messageID, "<"), "Message-ID must be wrapped in angle brackets")
+	require.True(t, strings.HasSuffix(messageID, ">"), "Message-ID must be wrapped in angle brackets")
+
+	idBody := strings.TrimSuffix(strings.TrimPrefix(messageID, "<"), ">")
+	local, domain, found := strings.Cut(idBody, "@")
+	require.True(t, found, "Message-ID must have a local@domain shape")
+	assert.NotEmpty(t, local)
+	assert.Equal(t, "example.com", domain, "domain part must come from the From address")
+}
+
+func TestEmailProvider_Send_MessageIDIsUniquePerSend(t *testing.T) {
+	server := newSMTPTestServer(t)
+	host, port := hostPort(t, server.addr)
+
+	p := newEmailProviderTrusting(t, server)
+	cfg := newEmailConfig(validEmailConfigParams(host, port))
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	_, err := p.Send(context.Background(), cfg, req)
+	require.NoError(t, err)
+	firstID := extractHeaderValue(t, server.capturedData(), "Message-ID")
+
+	_, err = p.Send(context.Background(), cfg, req)
+	require.NoError(t, err)
+	secondID := extractHeaderValue(t, server.capturedData(), "Message-ID")
+
+	assert.NotEqual(t, firstID, secondID, "each send must get its own Message-ID")
 }
 
 func TestEmailProvider_Send_NegotiatesSTARTTLS_WhenServerAdvertisesIt(t *testing.T) {
