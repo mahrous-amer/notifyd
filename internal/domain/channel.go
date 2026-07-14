@@ -15,10 +15,11 @@ const (
 	ChannelDiscord  ChannelType = "discord"
 	ChannelTelegram ChannelType = "telegram"
 	ChannelWhatsApp ChannelType = "whatsapp"
+	ChannelEmail    ChannelType = "email"
 )
 
 func ValidChannelTypes() []ChannelType {
-	return []ChannelType{ChannelDiscord, ChannelTelegram, ChannelWhatsApp}
+	return []ChannelType{ChannelDiscord, ChannelTelegram, ChannelWhatsApp, ChannelEmail}
 }
 
 func IsValidChannelType(ct ChannelType) bool {
