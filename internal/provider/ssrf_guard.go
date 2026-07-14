@@ -94,6 +94,14 @@ func IsBlockedIP(ip net.IP) bool {
 	return false
 }
 
+// ipLookuper is the subset of *net.Resolver's interface guardedDialContext
+// depends on. Defined as an interface so tests can stub DNS resolution
+// (e.g. to simulate a hostname with multiple A/AAAA records, one public and
+// one private) without touching the real network.
+type ipLookuper interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
 // guardedDialContext returns a DialContext function that validates the
 // RESOLVED address before connecting, not just the hostname up front. A
 // pre-resolve check (look up the host, decide, then let the standard dialer
@@ -108,7 +116,27 @@ func guardedDialContext(base *net.Dialer) func(ctx context.Context, network, add
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return base.DialContext(ctx, network, addr)
+	}
+	return newGuardedDialer(resolver, dial)
+}
 
+// newGuardedDialer builds the DialContext function from an ipLookuper and a
+// plain dial function, kept separate from guardedDialContext so tests can
+// substitute both: a stub resolver to simulate arbitrary DNS answers (like a
+// host with multiple A records, only one of which is private), and a dial
+// function that records whether it was ever called, to prove that every
+// resolved address is validated up front — before any address is dialed —
+// rather than being checked one at a time inside the dial loop. Validating
+// inside the loop would let a dial to an earlier, approved address succeed
+// and complete before a later, blocked address in the same answer is ever
+// inspected, silently reintroducing the SSRF hole this guard exists to
+// close.
+func newGuardedDialer(
+	resolver ipLookuper,
+	dial func(ctx context.Context, network, addr string) (net.Conn, error),
+) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -120,6 +148,10 @@ func guardedDialContext(base *net.Dialer) func(ctx context.Context, network, add
 			return nil, fmt.Errorf("resolve host: %w", err)
 		}
 
+		// Validate every resolved address before dialing any of them. A
+		// hostname can legitimately return multiple A/AAAA records; if
+		// even one is blocked, no address gets connected to at all — not
+		// even the addresses that come before it in the answer.
 		for _, ip := range ips {
 			if IsBlockedIP(ip) {
 				return nil, fmt.Errorf("%w: %s resolved to %s", errBlockedAddress, host, ip)
@@ -131,7 +163,7 @@ func guardedDialContext(base *net.Dialer) func(ctx context.Context, network, add
 		// substitute an address that was never validated.
 		var lastErr error
 		for _, ip := range ips {
-			conn, dialErr := base.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			conn, dialErr := dial(ctx, network, net.JoinHostPort(ip.String(), port))
 			if dialErr == nil {
 				return conn, nil
 			}
