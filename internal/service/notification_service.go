@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,9 @@ func (s *NotificationService) Send(ctx context.Context, tenantID uuid.UUID, inpu
 	}
 	if !channelCfg.IsActive {
 		return nil, fmt.Errorf("%w: channel config is disabled", domain.ErrValidationFailed)
+	}
+	if err := validateSubjectForChannel(channelCfg.Channel, input.Subject); err != nil {
+		return nil, err
 	}
 
 	ent, err := domain.EntitlementsOrFree(ctx, s.entRepo, tenantID)
@@ -171,4 +175,18 @@ func (s *NotificationService) effectiveMaxRetries(cfg *domain.ChannelConfig) int
 		return *cfg.DeliveryPrefs.MaxRetries
 	}
 	return s.maxRetries
+}
+
+// validateSubjectForChannel enforces channel-specific subject requirements.
+// Email has no reasonable default subject line the way chat channels do
+// (Discord/Telegram/WhatsApp messages read fine without one), so a missing or
+// blank subject is rejected here rather than silently sent as "(no subject)".
+func validateSubjectForChannel(channel domain.ChannelType, subject *string) error {
+	if channel != domain.ChannelEmail {
+		return nil
+	}
+	if subject == nil || strings.TrimSpace(*subject) == "" {
+		return fmt.Errorf("%w: subject is required for email notifications", domain.ErrValidationFailed)
+	}
+	return nil
 }

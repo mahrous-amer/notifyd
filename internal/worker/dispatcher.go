@@ -15,12 +15,12 @@ import (
 )
 
 type Dispatcher struct {
-	registry       *provider.Registry
-	notifRepo      domain.NotificationRepository
-	attemptRepo    domain.DeliveryAttemptRepository
-	channelRepo    domain.ChannelConfigRepository
-	metricRepo     domain.DeliveryMetricRepository
-	logger         zerolog.Logger
+	registry    *provider.Registry
+	notifRepo   domain.NotificationRepository
+	attemptRepo domain.DeliveryAttemptRepository
+	channelRepo domain.ChannelConfigRepository
+	metricRepo  domain.DeliveryMetricRepository
+	logger      zerolog.Logger
 }
 
 func NewDispatcher(
@@ -164,6 +164,11 @@ func (d *Dispatcher) handleProviderFailure(
 	if dbErr := d.attemptRepo.Create(ctx, attempt); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to record delivery attempt")
 	}
+
+	if resp.Permanent {
+		return d.handlePermanentProviderFailure(ctx, log, notifID, resp, durationMs)
+	}
+
 	if dbErr := d.notifRepo.IncrementRetry(ctx, notifID, resp.ErrorMessage); dbErr != nil {
 		log.Error().Err(dbErr).Msg("failed to increment retry count")
 	}
@@ -173,6 +178,32 @@ func (d *Dispatcher) handleProviderFailure(
 
 	log.Warn().Str("error", resp.ErrorMessage).Int("duration_ms", durationMs).Msg("delivery failed (provider)")
 	return fmt.Errorf("provider error: %s", resp.ErrorMessage)
+}
+
+// handlePermanentProviderFailure marks a notification as permanently failed
+// and signals asynq to stop retrying. Used for provider errors that retrying
+// cannot fix, such as SMTP authentication failures or rejected recipients.
+func (d *Dispatcher) handlePermanentProviderFailure(
+	ctx context.Context,
+	log zerolog.Logger,
+	notifID uuid.UUID,
+	resp *provider.SendResponse,
+	durationMs int,
+) error {
+	// Still counts as one attempt even though it will never be retried, so
+	// retry_count must be incremented here too — otherwise a first-attempt
+	// permanent failure leaves retry_count at 0 while delivery_attempts
+	// already has attempt_number 1, the same bookkeeping the retrying path
+	// keeps in sync.
+	if dbErr := d.notifRepo.IncrementRetry(ctx, notifID, resp.ErrorMessage); dbErr != nil {
+		log.Error().Err(dbErr).Msg("failed to increment retry count")
+	}
+	if dbErr := d.notifRepo.UpdateStatus(ctx, notifID, domain.StatusFailed, &resp.ErrorMessage); dbErr != nil {
+		log.Error().Err(dbErr).Msg("failed to update notification status to failed")
+	}
+
+	log.Warn().Str("error", resp.ErrorMessage).Int("duration_ms", durationMs).Msg("delivery failed permanently (provider)")
+	return fmt.Errorf("provider error: %s: %w", resp.ErrorMessage, asynq.SkipRetry)
 }
 
 func (d *Dispatcher) recordSuccessfulDelivery(

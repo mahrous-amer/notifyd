@@ -22,6 +22,10 @@ func TestIsValidChannelType(t *testing.T) {
 		assert.True(t, domain.IsValidChannelType(domain.ChannelWhatsApp))
 	})
 
+	t.Run("accepts email", func(t *testing.T) {
+		assert.True(t, domain.IsValidChannelType(domain.ChannelEmail))
+	})
+
 	t.Run("rejects unknown type", func(t *testing.T) {
 		assert.False(t, domain.IsValidChannelType(domain.ChannelType("slack")))
 	})
@@ -30,10 +34,11 @@ func TestIsValidChannelType(t *testing.T) {
 func TestValidChannelTypes(t *testing.T) {
 	types := domain.ValidChannelTypes()
 
-	require.Len(t, types, 3, "expected exactly three valid channel types")
+	require.Len(t, types, 4, "expected exactly four valid channel types")
 	assert.Contains(t, types, domain.ChannelDiscord)
 	assert.Contains(t, types, domain.ChannelTelegram)
 	assert.Contains(t, types, domain.ChannelWhatsApp)
+	assert.Contains(t, types, domain.ChannelEmail)
 }
 
 func TestDeliveryPreferencesValidate(t *testing.T) {

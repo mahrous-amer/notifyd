@@ -1,6 +1,6 @@
 # notifyd
 
-notifyd is a multi-tenant notification delivery service written in Go. It receives notification requests via a REST API, routes them to third-party messaging channels (Discord, Telegram, WhatsApp), and guarantees delivery through a Redis-backed queue with automatic retries and exponential backoff.
+notifyd is a multi-tenant notification delivery service written in Go. It receives notification requests via a REST API, routes them to third-party messaging channels (Discord, Telegram, WhatsApp, email), and guarantees delivery through a Redis-backed queue with automatic retries and exponential backoff.
 
 ---
 
@@ -33,7 +33,7 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
 - **Multi-tenant** — each tenant has its own API key, API secret, and isolated channel configurations.
 - **JWT authentication** — tenants exchange their API key and secret for a short-lived JWT. All protected endpoints require a valid bearer token.
 - **Admin authentication** — separate admin API key/secret for tenant management endpoints.
-- **Three delivery channels** — Discord (webhook), Telegram (Bot API), and WhatsApp (Meta Cloud API).
+- **Four delivery channels** — Discord (webhook), Telegram (Bot API), WhatsApp (Meta Cloud API), and email (bring-your-own SMTP).
 - **Guaranteed delivery** — notifications are enqueued in Redis via [Asynq](https://github.com/hibiken/asynq). The worker processes them asynchronously, independent of the API server.
 - **Exponential backoff retries** — failed deliveries are retried automatically up to a configurable maximum. Permanently failed tasks move to Asynq's dead letter queue.
 - **Delivery attempt tracking** — every attempt (success or failure) is recorded in PostgreSQL with timing, HTTP response data, and error messages.
@@ -336,6 +336,23 @@ curl -s -X POST https://notifyd.fluxintek.com/channels \
       "recipient": "15551234567"
     }
   }'
+
+# Email (BYO-SMTP)
+curl -s -X POST https://notifyd.fluxintek.com/channels \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "channel": "email",
+    "name": "ops-email",
+    "config": {
+      "host": "smtp.example.com",
+      "port": 587,
+      "username": "alerts@example.com",
+      "password": "app-password",
+      "from": "alerts@example.com",
+      "to": ["ops@example.com"]
+    }
+  }'
 ```
 
 Optional delivery preferences:
@@ -479,7 +496,7 @@ curl -s "https://notifyd.fluxintek.com/notifications?status=failed&channel=disco
 | `limit` | int | 20 | Page size (1–100) |
 | `offset` | int | 0 | Pagination offset |
 | `status` | string | — | `pending`, `processing`, `delivered`, `retrying`, `failed` |
-| `channel` | string | — | `telegram`, `discord`, `whatsapp` |
+| `channel` | string | — | `telegram`, `discord`, `whatsapp`, `email` |
 
 #### GET /notifications/{id}
 
@@ -699,6 +716,36 @@ Messages are sent via `sendMessage` with `parse_mode: Markdown`.
 | `phone_number_id` | Yes | WhatsApp Business phone number ID from Meta |
 | `access_token` | Yes | Meta access token with `whatsapp_business_messaging` permission |
 | `recipient` | Yes | Recipient phone number in E.164 format (digits only, no `+`) |
+
+### Email
+
+Bring-your-own SMTP: mail is sent from the customer's own domain using their own SMTP credentials, so there's no shared-IP deliverability or DKIM/SPF setup to manage.
+
+```json
+{
+  "host": "smtp.example.com",
+  "port": 587,
+  "username": "alerts@example.com",
+  "password": "app-password",
+  "from": "alerts@example.com",
+  "to": ["ops@example.com"],
+  "cc": ["escalations@example.com"],
+  "reply_to": "noreply@example.com"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | SMTP server hostname |
+| `port` | Yes | SMTP port. `465` negotiates implicit TLS; any other port uses STARTTLS when the server advertises it |
+| `username` | Yes | SMTP auth username |
+| `password` | Yes | SMTP auth password |
+| `from` | Yes | Envelope and header `From` address |
+| `to` | Yes | Fixed recipient list — every send through this channel goes to all of these addresses |
+| `cc` | No | Additional CC recipients |
+| `reply_to` | No | Optional `Reply-To` address |
+
+`subject` is required for email sends (empty or blank returns `400`). `format_mode` controls the MIME body: `plain` sends `text/plain`, `html` sends `text/html`, and `markdown` renders to `text/html` with the original markdown kept as a `text/plain` alternative part.
 
 ---
 
@@ -978,7 +1025,7 @@ notifyd/
 │   ├── config/           # Environment-based configuration
 │   ├── domain/           # Core types, interfaces, errors, status constants
 │   ├── handler/          # HTTP handlers (auth, channel, notification, tenant, health)
-│   ├── provider/         # Channel providers (Discord, Telegram, WhatsApp)
+│   ├── provider/         # Channel providers (Discord, Telegram, WhatsApp, Email)
 │   ├── repository/       # PostgreSQL repository implementations
 │   ├── router/           # Chi router wiring
 │   ├── service/          # Business logic (tenant, channel, notification)

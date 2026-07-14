@@ -1023,6 +1023,7 @@ components:
         - discord
         - telegram
         - whatsapp
+        - email
 
     DeliveryPreferences:
       type: object
@@ -1061,7 +1062,11 @@ components:
           type: string
         config:
           type: object
-          description: Provider-specific configuration object (e.g. bot token, chat ID). Structure varies by channel type.
+          description: >-
+            Provider-specific configuration object. Structure varies by channel type:
+            discord takes { webhook_url }; telegram takes { bot_token, chat_id };
+            whatsapp takes { phone_number_id, access_token, recipient }; email takes
+            the shape described by EmailChannelConfig.
         is_active:
           type: boolean
         delivery_prefs:
@@ -1086,7 +1091,7 @@ components:
           type: string
         config:
           type: object
-          description: Provider-specific configuration object.
+          description: Provider-specific configuration object. See ChannelConfig.config.
         delivery_prefs:
           $ref: "#/components/schemas/DeliveryPreferences"
 
@@ -1097,11 +1102,65 @@ components:
           type: string
         config:
           type: object
-          description: Provider-specific configuration object.
+          description: Provider-specific configuration object. See ChannelConfig.config.
         is_active:
           type: boolean
         delivery_prefs:
           $ref: "#/components/schemas/DeliveryPreferences"
+
+    EmailChannelConfig:
+      type: object
+      description: >-
+        Config shape for channel type "email" (BYO-SMTP). Credentials are the
+        customer's own mail server; notifyd never sends through a shared
+        platform mailbox.
+      required:
+        - host
+        - port
+        - username
+        - password
+        - from
+        - to
+      properties:
+        host:
+          type: string
+          description: SMTP server hostname.
+          example: smtp.example.com
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: >-
+            SMTP port. 465 negotiates implicit TLS; any other port uses
+            STARTTLS when the server advertises it.
+          example: 587
+        username:
+          type: string
+          description: SMTP auth username.
+        password:
+          type: string
+          description: SMTP auth password. Stored only in channel_configs.config; never returned by the API.
+        from:
+          type: string
+          format: email
+          description: Envelope and header From address.
+        to:
+          type: array
+          items:
+            type: string
+            format: email
+          minItems: 1
+          description: Fixed recipient list. Every notification sent through this channel goes to all of these addresses.
+        cc:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Optional CC recipient list.
+        reply_to:
+          type: string
+          format: email
+          description: Optional Reply-To address.
 
     # -------------------------------------------------------------------------
     # Notifications
@@ -1169,6 +1228,10 @@ components:
           format: uuid
         subject:
           type: string
+          description: >-
+            Optional for chat channels (discord, telegram, whatsapp). Required
+            and must be non-blank when the target channel is email — a 400 is
+            returned otherwise.
         body:
           type: string
         metadata:
