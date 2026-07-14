@@ -78,6 +78,7 @@ func main() {
 	registry.Register(provider.NewWhatsAppProvider(httpClient))
 	registry.Register(provider.NewEmailProvider())
 	registry.Register(provider.NewSlackProvider(httpClient))
+	registry.Register(provider.NewWebhookProvider())
 
 	dispatcher := worker.NewDispatcher(registry, notifRepo, attemptRepo, channelRepo, metricRepo, logger)
 

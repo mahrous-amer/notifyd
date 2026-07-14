@@ -88,6 +88,7 @@ func main() {
 	registry.Register(provider.NewWhatsAppProvider(httpClient))
 	registry.Register(provider.NewEmailProvider())
 	registry.Register(provider.NewSlackProvider(httpClient))
+	registry.Register(provider.NewWebhookProvider())
 
 	entRepo := repository.NewPgEntitlementRepo(dbPool)
 	apiKeyRepo := repository.NewPgAPIKeyRepo(dbPool)
