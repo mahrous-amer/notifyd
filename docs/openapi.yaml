@@ -1465,7 +1465,13 @@ components:
       properties:
         id:
           type: string
-          description: Unique per delivery attempt group; stable across retries of the same event. Suitable as an idempotency key.
+          description: >-
+            Derived deterministically from (notification_id, event_type), not
+            randomly generated per delivery attempt. Delivery is
+            at-least-once: a worker crash or redelivery re-emitting the same
+            logical transition always reproduces this exact id, so it is a
+            reliable idempotency key for deduplication (see
+            X-Notifyd-Event-Id).
           example: evt_01H9X8K2QYTVRM3F7WZC4B5D6E
         type:
           $ref: "#/components/schemas/WebhookEventType"

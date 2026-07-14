@@ -91,7 +91,7 @@ func buildWebhookEventTaskPayload(endpointID uuid.UUID, params EmitParams) Webho
 	return WebhookEventTaskPayload{
 		EndpointID: endpointID,
 		Event: WebhookEventPayload{
-			ID:        "evt_" + uuid.New().String(),
+			ID:        webhookEventID(params.NotificationID, params.EventType),
 			Type:      string(params.EventType),
 			CreatedAt: time.Now().UTC(),
 			Data: WebhookEventData{
@@ -104,6 +104,33 @@ func buildWebhookEventTaskPayload(endpointID uuid.UUID, params EmitParams) Webho
 			},
 		},
 	}
+}
+
+// webhookEventNamespace is a fixed, arbitrary UUID used as the namespace
+// argument to uuid.NewSHA1 below. Its only requirement is stability across
+// process restarts and deploys — any fixed value works equally well, since
+// what matters is that the same (notification_id, event_type) pair always
+// hashes to the same output, not what the namespace itself is.
+var webhookEventNamespace = uuid.MustParse("2b5b1e0a-6a8a-4c1e-9c2a-2b6b6a8a4c1e")
+
+// webhookEventID derives a stable event ID from the notification and event
+// type it describes, rather than generating a fresh random ID per call.
+//
+// A worker crash between marking a notification's terminal status and
+// calling Emit causes asynq to redeliver the notification:deliver task,
+// which re-runs the dispatcher and re-emits for the same logical
+// transition. With a random ID, that redelivery would produce a second
+// event carrying a different X-Notifyd-Event-Id, and a receiver
+// deduplicating on that header (as the README instructs) could never
+// collapse the two into one logical delivery. Deriving the ID from
+// (notification_id, event_type) with UUIDv5 makes every re-emission of the
+// same transition produce the byte-identical ID, so the promised dedup key
+// actually works — delivery is at-least-once, and the event ID is what
+// makes at-least-once safe to treat as effectively-once on the receiver
+// side.
+func webhookEventID(notificationID uuid.UUID, eventType domain.WebhookEventType) string {
+	data := notificationID.String() + ":" + string(eventType)
+	return "evt_" + uuid.NewSHA1(webhookEventNamespace, []byte(data)).String()
 }
 
 // eventStatusForType maps the event type to the "status" field in the event

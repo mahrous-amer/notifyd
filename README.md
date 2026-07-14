@@ -642,13 +642,15 @@ Every subscribed terminal transition POSTs this body to the endpoint's `url`:
 
 `attempts` is the notification's true attempt count, including the terminal one. Only the two terminal statuses ever fire an event — `pending`/`processing`/`retrying` are intentionally not observable this way.
 
+`id` is derived deterministically from `(notification_id, event_type)`, not randomly generated per delivery attempt: re-emitting the same logical transition (e.g. after a notifyd worker crash and task redelivery) always produces the identical `id`. **Delivery is at-least-once, not exactly-once** — your endpoint should be prepared to receive the same event more than once, and should deduplicate on `id` (equivalently, the `X-Notifyd-Event-Id` header) rather than assuming a single delivery.
+
 Headers on every delivery:
 
 | Header | Description |
 |---|---|
 | `X-Notifyd-Timestamp` | Unix timestamp used in the signature below |
 | `X-Notifyd-Signature` | `sha256=<hex hmac>`, computed as HMAC-SHA256 over `"<timestamp>.<raw body>"` using your endpoint's `secret` as the key |
-| `X-Notifyd-Event-Id` | The event's `id` field, stable across retries of the same event — use it to deduplicate if your endpoint might see the same event more than once |
+| `X-Notifyd-Event-Id` | The event's `id` field. Stable across every retry *and* redelivery of the same logical transition — the reliable key to deduplicate on |
 
 **Retry behavior:** a 2xx response is success. Anything else is retried with exponential backoff, up to 8 attempts spread over roughly 6 hours, then the event is dropped and the failure is recorded in notifyd's logs — there is no redelivery UI. No redirect is ever followed.
 
