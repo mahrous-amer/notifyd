@@ -174,10 +174,18 @@ func isPermanentSMTPError(err error) bool {
 	if errors.As(err, &protoErr) {
 		return protoErr.Code >= 500 && protoErr.Code < 600
 	}
-	// Connection failures, DNS errors, and context deadline/cancellation are
-	// all transport-level problems that a later retry can plausibly resolve.
+	// Connection failures, DNS errors, transientSMTPError, and context
+	// deadline/cancellation are all transport-level problems that a later
+	// retry can plausibly resolve.
 	return false
 }
+
+// transientSMTPError marks a failure as retryable when it has no SMTP status
+// code to classify by (e.g. a locally-detected precondition failure such as a
+// missing STARTTLS advertisement, rather than a server reply).
+type transientSMTPError struct{ msg string }
+
+func (e *transientSMTPError) Error() string { return e.msg }
 
 // buildEmailMessage renders the full RFC 5322 message (headers + body) for
 // the given format mode:
@@ -273,10 +281,19 @@ func sendViaSMTP(ctx context.Context, cfg emailConfig, message []byte, rootCAs *
 	defer client.Close() //nolint:errcheck
 
 	if cfg.Port != implicitTLSPort {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, RootCAs: rootCAs}); err != nil {
-				return fmt.Errorf("starttls: %w", err)
-			}
+		ok, _ := client.Extension("STARTTLS")
+		if !ok {
+			// A server that doesn't advertise STARTTLS leaves no way to
+			// encrypt the session on this port. Refuse rather than fall
+			// through to AUTH in plaintext. A stripped STARTTLS advertisement
+			// is itself a class of MITM downgrade attack, but it is equally
+			// explained by transient misconfiguration or a network
+			// intermediary interfering with this one connection, so treat it
+			// as retryable rather than permanently failing the channel.
+			return &transientSMTPError{msg: "server does not advertise STARTTLS; refusing to send credentials over plaintext"}
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, RootCAs: rootCAs}); err != nil {
+			return fmt.Errorf("starttls: %w", err)
 		}
 	}
 

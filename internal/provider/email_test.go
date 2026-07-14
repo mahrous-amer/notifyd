@@ -208,11 +208,22 @@ func hostPort(t *testing.T, addr string) (string, int) {
 	return host, port
 }
 
+// newEmailProviderTrusting returns an EmailProvider configured to trust
+// server's self-signed certificate, for tests that exercise MIME structure,
+// recipient handling, or SMTP-reply classification rather than TLS
+// verification itself.
+func newEmailProviderTrusting(t *testing.T, server *smtpTestServer) *provider.EmailProvider {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(server.leafCertificate(t))
+	return provider.NewEmailProviderWithTLSRootCAs(pool)
+}
+
 func TestEmailProvider_Send_PlainFormatMode_SendsTextPlainOnly(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Plain Alert", Body: "Something happened", FormatMode: "plain"}
 
@@ -234,7 +245,7 @@ func TestEmailProvider_Send_HTMLFormatMode_SendsTextHTMLOnly(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "HTML Alert", Body: "<p>Something happened</p>", FormatMode: "html"}
 
@@ -253,7 +264,7 @@ func TestEmailProvider_Send_MarkdownFormatMode_SendsHTMLWithPlainAlternative(t *
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "MD Alert", Body: "**bold** text", FormatMode: "markdown"}
 
@@ -277,7 +288,7 @@ func TestEmailProvider_Send_DefaultFormatMode_TreatsAsPlain(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "No Mode", Body: "Body text"}
 
@@ -297,7 +308,7 @@ func TestEmailProvider_Send_ServerDropsConnectionAfterAcceptingData_StillReports
 	server.dropAfterData = true
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 
@@ -312,7 +323,7 @@ func TestEmailProvider_Send_PropagatesRecipients(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	params := validEmailConfigParams(host, port)
 	params.To = []string{"a@example.com", "b@example.com"}
 	params.CC = []string{"c@example.com"}
@@ -336,7 +347,7 @@ func TestEmailProvider_Send_SetsReplyToHeader(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	params := validEmailConfigParams(host, port)
 	params.ReplyTo = "support@example.com"
 	cfg := newEmailConfig(params)
@@ -386,6 +397,27 @@ func TestEmailProvider_Send_STARTTLS_RejectsUntrustedCertificate(t *testing.T) {
 	assert.Empty(t, server.capturedData(), "message must not be delivered over an unverified connection")
 }
 
+func TestEmailProvider_Send_NoSTARTTLSAdvertised_RefusesToSendCredentialsInPlaintext(t *testing.T) {
+	// A server that never advertises STARTTLS leaves no way to encrypt the
+	// session on a non-465 port, so the provider must refuse before AUTH
+	// rather than silently falling through to plaintext credentials.
+	server := newSMTPTestServerWithoutTLS(t)
+	host, port := hostPort(t, server.addr)
+
+	p := provider.NewEmailProvider()
+	cfg := newEmailConfig(validEmailConfigParams(host, port))
+	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
+
+	resp, err := p.Send(context.Background(), cfg, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.ErrorMessage, "STARTTLS")
+	assert.False(t, server.didAuthenticate(), "must not attempt AUTH without an encrypted channel")
+	assert.Empty(t, server.capturedData(), "must not reach DATA without an encrypted channel")
+}
+
 // --- Error classification ---
 
 func TestEmailProvider_Send_PermanentSMTPFailure_AuthenticationRejected(t *testing.T) {
@@ -394,7 +426,7 @@ func TestEmailProvider_Send_PermanentSMTPFailure_AuthenticationRejected(t *testi
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 	server.setDataReply(535, "Authentication credentials invalid")
@@ -411,7 +443,7 @@ func TestEmailProvider_Send_PermanentSMTPFailure_MailboxUnavailable(t *testing.T
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 	server.setDataReply(550, "Mailbox unavailable")
@@ -428,7 +460,7 @@ func TestEmailProvider_Send_TransientSMTPFailure_ServiceNotAvailable(t *testing.
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 	server.setDataReply(421, "Service not available, closing transmission channel")
@@ -445,7 +477,7 @@ func TestEmailProvider_Send_TransientSMTPFailure_MailboxBusy(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 	server.setDataReply(450, "Mailbox busy")
@@ -462,7 +494,7 @@ func TestEmailProvider_Send_TransientSMTPFailure_LocalError(t *testing.T) {
 	server := newSMTPTestServer(t)
 	host, port := hostPort(t, server.addr)
 
-	p := provider.NewEmailProvider()
+	p := newEmailProviderTrusting(t, server)
 	cfg := newEmailConfig(validEmailConfigParams(host, port))
 	req := provider.SendRequest{Subject: "Subj", Body: "Body", FormatMode: "plain"}
 	server.setDataReply(451, "Local error in processing")

@@ -46,10 +46,31 @@ type smtpTestServer struct {
 	authAttempt bool
 }
 
-// newSMTPTestServer starts the listener on an ephemeral loopback port and
-// registers cleanup. dataReplyCode/Msg default to "250 OK" style acceptance;
-// override via the returned server's fields before the client connects.
+// newSMTPTestServer starts a listener that advertises STARTTLS in its EHLO
+// response and can complete a real TLS handshake using a freshly generated
+// self-signed certificate — the shape of any real STARTTLS-capable relay on
+// port 587. dataReplyCode/Msg default to "250 OK" style acceptance; override
+// via the returned server's fields before the client connects. Registers
+// cleanup.
 func newSMTPTestServer(t *testing.T) *smtpTestServer {
+	t.Helper()
+
+	s := newSMTPTestServerWithoutTLS(t)
+	s.tlsConf = &tls.Config{Certificates: []tls.Certificate{generateSelfSignedCert(t)}}
+	return s
+}
+
+// newSMTPTestServerWithTLS is an alias for newSMTPTestServer kept for call
+// sites that want to make the TLS requirement explicit at the call site.
+func newSMTPTestServerWithTLS(t *testing.T) *smtpTestServer {
+	t.Helper()
+	return newSMTPTestServer(t)
+}
+
+// newSMTPTestServerWithoutTLS starts a listener that never advertises
+// STARTTLS, for tests that specifically exercise the no-encryption-available
+// path (see EmailProvider's fail-closed STARTTLS check).
+func newSMTPTestServerWithoutTLS(t *testing.T) *smtpTestServer {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -69,19 +90,6 @@ func newSMTPTestServer(t *testing.T) *smtpTestServer {
 
 	go s.acceptLoop()
 
-	return s
-}
-
-// newSMTPTestServerWithTLS starts a server that advertises STARTTLS in its
-// EHLO response and can complete a real TLS handshake using a freshly
-// generated self-signed certificate, so tests can verify the provider
-// actually upgrades the connection rather than sending credentials in the
-// clear.
-func newSMTPTestServerWithTLS(t *testing.T) *smtpTestServer {
-	t.Helper()
-
-	s := newSMTPTestServer(t)
-	s.tlsConf = &tls.Config{Certificates: []tls.Certificate{generateSelfSignedCert(t)}}
 	return s
 }
 
