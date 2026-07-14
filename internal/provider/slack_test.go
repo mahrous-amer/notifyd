@@ -285,6 +285,53 @@ func TestMarkdownToSlackMrkdwn(t *testing.T) {
 			input:    "",
 			expected: "",
 		},
+		{
+			// Regression test: the bold pass fences its output in a
+			// Private-Use-Area sentinel (see boldPlaceholder) so the italic
+			// pass doesn't re-match the single asterisks bold conversion
+			// produces, then strips the sentinel back to "*" at the end.
+			// If notification body text happens to already contain that
+			// sentinel character, it must be stripped up front rather than
+			// left in place -- otherwise the final unconditional
+			// strings.ReplaceAll(text, boldPlaceholder, "*") treats a
+			// user-supplied U+E000 as one of the pass's own markers and
+			// turns it into a stray, unpaired "*" in the output.
+			name:     "input already containing the PUA sentinel character has it stripped, not turned into a stray asterisk",
+			input:    "score: 100\ue000 nice",
+			expected: "score: 100 nice",
+		},
+		{
+			// Documented, not fixed: CommonMark's "strong emphasis inside
+			// emphasis" (***text***) has no single unambiguous mrkdwn
+			// equivalent, and this converter does not attempt to parse
+			// nested/combined emphasis. The bold pass greedily consumes the
+			// first "**...**" it finds (positions 0-2 and 25-27 of the
+			// triple-asterisk run), leaving one leading and one trailing
+			// asterisk that the italic pass then wraps in underscores,
+			// producing a lopsided result. Triple-asterisk emphasis in a
+			// notification body renders imperfectly in Slack; this is a
+			// known limitation of the "small mapping function" the design
+			// doc calls for, not a defect to chase.
+			name:     "triple asterisk emphasis is not parsed correctly (documented limitation)",
+			input:    "***triple bold italic***",
+			expected: "*_triple bold italic*_",
+		},
+		{
+			// Documented, not fixed: CommonMark requires emphasis
+			// delimiters to hug their content (no interior whitespace) to
+			// count as emphasis at all — "* text *" with spaces just
+			// inside the asterisks is literal punctuation in CommonMark,
+			// not italic. This converter's regex has no such
+			// flanking-whitespace rule, so it converts space-padded
+			// asterisks into mrkdwn italic anyway. Rare in practice (most
+			// authors either mean emphasis, without the padding spaces, or
+			// mean literal asterisks with more separation than this), and
+			// not worth a more complex parser for v1's "small mapping
+			// function".
+			name:     "space-flanked single asterisks are still converted to italic (documented limitation)",
+			input:    "a * b * c",
+			expected: "a _ b _ c",
+		},
 	}
 
 	for _, tt := range tests {

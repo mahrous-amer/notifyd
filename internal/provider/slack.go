@@ -144,14 +144,25 @@ var (
 // boldPlaceholder brackets a converted bold span so the italic pass (which
 // also matches single asterisks) skips over it instead of treating the
 // bold markers as its own delimiters. U+E000 is in Unicode's Private Use
-// Area, so it cannot appear in ordinary notification text.
-const boldPlaceholder = ""
+// Area, so it essentially never appears in ordinary notification text --
+// but MarkdownToSlackMrkdwn still strips any pre-existing occurrence from
+// the input before using it as an internal marker, so a user's own text
+// can't be mistaken for the pass's bookkeeping (see below).
+const boldPlaceholder = "\ue000"
 
 // MarkdownToSlackMrkdwn converts a CommonMark-ish subset (bold, italic,
 // inline code, links) to Slack's mrkdwn syntax. Unrecognized syntax passes
 // through unchanged. Exported for table-driven testing and reuse by callers
 // that need the conversion independent of a full Send call.
 func MarkdownToSlackMrkdwn(text string) string {
+	// Strip any pre-existing occurrence of the sentinel character before
+	// using it as an internal marker below. Without this, input that
+	// already contains U+E000 would be indistinguishable from the bold
+	// pass's own bookkeeping once that pass adds its markers, and the
+	// final unconditional replace at the end of this function would turn
+	// the user's original character into a stray, unpaired "*".
+	text = strings.ReplaceAll(text, boldPlaceholder, "")
+
 	// Links first: rewriting "[text](url)" before the bold/italic passes
 	// avoids the asterisk patterns matching characters inside the URL.
 	text = linkPattern.ReplaceAllString(text, "<$2|$1>")
