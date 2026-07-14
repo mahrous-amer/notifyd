@@ -46,7 +46,7 @@ func FreeDefaults(tenantID uuid.UUID, now time.Time) *Entitlements {
 		TenantID:        tenantID,
 		PlanCode:        "free",
 		MessageLimit:    1000,
-		AllowedChannels: []ChannelType{ChannelDiscord, ChannelTelegram},
+		AllowedChannels: []ChannelType{ChannelDiscord, ChannelTelegram, ChannelEmail},
 		APIKeyLimit:     1,
 		RetentionDays:   7,
 		PeriodStart:     start,
