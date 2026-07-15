@@ -5,11 +5,21 @@ delivery API.
 
 ## Install
 
+**Not yet published to PyPI.** Until the first release (see
+[../PUBLISHING.md](../PUBLISHING.md)), install from source:
+
 ```
-pip install notifyd-sdk
+pip install "git+ssh://git@github.com/mahrous-amer/notifyd.git#subdirectory=sdks/python"
 ```
 
-Requires Python 3.9+.
+or, from a local clone:
+
+```
+git clone git@github.com:mahrous-amer/notifyd.git
+pip install ./notifyd/sdks/python
+```
+
+Requires Python 3.9+. Once published, install will be `pip install notifyd-sdk`.
 
 ## Usage
 

@@ -5,11 +5,24 @@ delivery API.
 
 ## Install
 
+**Not yet published to npm.** Until the first release (see
+[../PUBLISHING.md](../PUBLISHING.md)), install from source:
+
 ```
-npm install @notifyd/sdk
+git clone git@github.com:mahrous-amer/notifyd.git
+cd notifyd/sdks/typescript
+npm ci
+npm run build
 ```
 
-Requires Node 18+ (uses the native `fetch` global).
+Then, from the project that wants to depend on it:
+
+```
+npm install /path/to/notifyd/sdks/typescript
+```
+
+Requires Node 18+ (uses the native `fetch` global). Once published, install will be
+`npm install @notifyd/sdk`.
 
 ## Usage
 
