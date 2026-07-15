@@ -27,19 +27,46 @@ from .types import (
 
 DEFAULT_BASE_URL = "https://notifyd.fluxintek.com/api"
 
-# Matches Go's time.Duration.String() output (e.g. "24h0m0s", "1h30m",
-# "45s", "500ms"). "ms" is listed before "m"/"s" so the alternation tries
-# it first -- otherwise "m" would consume the "m" in "500ms" and leave a
-# dangling "s" unmatched.
-_GO_DURATION_UNIT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)(h|ms|m|s)")
-_SECONDS_PER_UNIT = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+# One (amount, unit) pair, e.g. the "4ms" in "1h2m3s4ms". Unit alternatives
+# list "ns"/"us"/"µs"/"μs"/"ms" before the bare "m"/"s" they'd otherwise be
+# swallowed by -- regex alternation matches the first alternative that
+# fits, so "m" would consume the "m" in "500ms" and leave a dangling,
+# unmatched "s" if it came first.
+_DURATION_UNIT = r"(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|h|m|s)"
+
+# Anchored to match one or more consecutive unit pairs spanning the ENTIRE
+# string, with nothing before or after. Go's own time.ParseDuration is
+# similarly strict: "45s garbage" and "garbage 45s" are both parse errors,
+# not "45 seconds with some ignored trailing/leading text."
+_FULL_DURATION_PATTERN = re.compile(rf"^(?:{_DURATION_UNIT})+$")
+_UNIT_PATTERN = re.compile(_DURATION_UNIT)
+
+_SECONDS_PER_UNIT = {
+    "h": 3600.0,
+    "m": 60.0,
+    "s": 1.0,
+    "ms": 1e-3,
+    "us": 1e-6,
+    "µs": 1e-6,  # U+00B5 MICRO SIGN
+    "μs": 1e-6,  # U+03BC GREEK SMALL LETTER MU -- Go accepts both spellings
+    "ns": 1e-9,
+}
 
 
 def _parse_go_duration_seconds(duration: str) -> float:
-    """Parses a Go-style duration string into seconds."""
-    matches = _GO_DURATION_UNIT_PATTERN.findall(duration)
-    if not matches:
+    """Parses a Go-style duration string into seconds.
+
+    Unlike Go's time.ParseDuration, this rejects negative durations. A
+    negative expires_in can never be legitimate for a token lifetime, so
+    treating it as a parse error catches a malformed/malicious response
+    instead of silently caching a token as already expired.
+    """
+    if duration.startswith("-"):
+        raise ValueError(f'notifyd: negative duration not allowed: "{duration}"')
+    if not _FULL_DURATION_PATTERN.match(duration):
         raise ValueError(f'notifyd: unparseable duration "{duration}"')
+
+    matches = _UNIT_PATTERN.findall(duration)
     return sum(float(amount) * _SECONDS_PER_UNIT[unit] for amount, unit in matches)
 
 
