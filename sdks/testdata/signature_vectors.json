@@ -1,0 +1,42 @@
+[
+  {
+    "name": "simple_json_body",
+    "secret": "whsec_test_1234567890abcdef",
+    "timestamp": "1700000000",
+    "body": "{\"id\":\"evt_01H9X8K2QYTVRM3F7WZC4B5D6E\",\"type\":\"notification.delivered\"}",
+    "signature_hex": "1cbd4b3426a5623e2b372247e506fa83d6aedb4c5772d2fabbf344c73abfb57b",
+    "header_value": "sha256=1cbd4b3426a5623e2b372247e506fa83d6aedb4c5772d2fabbf344c73abfb57b"
+  },
+  {
+    "name": "empty_body",
+    "secret": "whsec_test_1234567890abcdef",
+    "timestamp": "1700000001",
+    "body": "",
+    "signature_hex": "d727597b1f53675c240762778add18dea39ca43dfc9f1873707b8b583be05a12",
+    "header_value": "sha256=d727597b1f53675c240762778add18dea39ca43dfc9f1873707b8b583be05a12"
+  },
+  {
+    "name": "unicode_body",
+    "secret": "whsec_unicode_secret_ñ",
+    "timestamp": "1700000002",
+    "body": "{\"message\":\"café ☃ 😀\"}",
+    "signature_hex": "dd2825e47595d6029f295dd35e16f834b3b26292afd80aff3c95f046eec496e4",
+    "header_value": "sha256=dd2825e47595d6029f295dd35e16f834b3b26292afd80aff3c95f046eec496e4"
+  },
+  {
+    "name": "long_body",
+    "secret": "whsec_long_body_secret",
+    "timestamp": "1700000003",
+    "body": "{\"data\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+    "signature_hex": "a452c6c2c86becea64121790f003557807bca5b427468c503e89e22e085ce147",
+    "header_value": "sha256=a452c6c2c86becea64121790f003557807bca5b427468c503e89e22e085ce147"
+  },
+  {
+    "name": "body_containing_dot_literal",
+    "secret": "whsec_dot_edge_case",
+    "timestamp": "1700000004",
+    "body": "{\"note\":\"1700000004.not-the-real-timestamp\"}",
+    "signature_hex": "ce395ee23ec37217b825b29d71c8768a0867cae2fb4496882caa3e496816c88e",
+    "header_value": "sha256=ce395ee23ec37217b825b29d71c8768a0867cae2fb4496882caa3e496816c88e"
+  }
+]
