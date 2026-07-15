@@ -85,7 +85,6 @@ export interface SendInput {
   /** Optional for chat/webhook channels; required and non-blank for email. */
   subject?: string;
   body: string;
-  format?: FormatMode;
   metadata?: Record<string, unknown>;
 }
 
