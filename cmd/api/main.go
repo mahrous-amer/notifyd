@@ -73,6 +73,7 @@ func main() {
 	notifRepo := repository.NewPgNotificationRepo(dbPool)
 	attemptRepo := repository.NewPgDeliveryAttemptRepo(dbPool)
 	metricRepo := repository.NewPgDeliveryMetricRepo(dbPool)
+	webhookEndpointRepo := repository.NewPgWebhookEndpointRepo(dbPool)
 
 	httpTransport := &http.Transport{
 		MaxIdleConns:        100,
@@ -97,6 +98,7 @@ func main() {
 	channelSvc := service.NewChannelService(channelRepo, entRepo, registry, logger)
 	notifSvc := service.NewNotificationService(notifRepo, channelRepo, entRepo, asynqClient, cfg.MaxRetries, logger)
 	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, entRepo)
+	webhookEndpointSvc := service.NewWebhookEndpointService(webhookEndpointRepo)
 	entH := handler.NewEntitlementHandler(entRepo, notifRepo)
 
 	quotaSvc := quota.NewService(redisCli, entRepo, cfg.BillingWebhookURL, httpClient, logger)
@@ -106,10 +108,11 @@ func main() {
 	channelH := handler.NewChannelHandler(channelSvc)
 	notifH := handler.NewNotificationHandler(notifSvc, attemptRepo, metricRepo)
 	apiKeyH := handler.NewAPIKeyHandler(apiKeySvc)
+	webhookH := handler.NewWebhookEndpointHandler(webhookEndpointSvc)
 	authH := handler.NewAuthHandler(tenantRepo, apiKeyRepo, jwtMgr, cfg.AdminAPIKey, cfg.AdminAPISecret)
 	healthH := handler.NewHealthHandler(dbPool, redisCli)
 
-	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret, quotaMW, apiKeyH)
+	r := router.New(jwtMgr, tenantH, channelH, notifH, authH, healthH, entH, cfg.ServiceHMACSecret, quotaMW, apiKeyH, webhookH)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.APIPort),

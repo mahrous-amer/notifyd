@@ -234,6 +234,149 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /webhooks:
+    get:
+      summary: List webhook endpoints
+      description: >-
+        Returns all status-webhook endpoints belonging to the authenticated
+        tenant. The signing secret is never included in this response — see
+        POST /webhooks.
+      operationId: listWebhookEndpoints
+      tags:
+        - Webhooks
+      responses:
+        "200":
+          description: Array of webhook endpoints.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookEndpoint"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create webhook endpoint
+      description: >-
+        Registers a new destination for notification.delivered /
+        notification.failed status events. notifyd generates the signing
+        secret and returns it in the response body exactly once — it cannot
+        be retrieved again afterward, so store it immediately. Capped at 3
+        endpoints per tenant.
+      operationId: createWebhookEndpoint
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookEndpointInput"
+      responses:
+        "201":
+          description: Webhook endpoint created. The response includes the plaintext secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointCreated"
+        "400":
+          description: >-
+            Validation failure: url is missing/not https, url resolves to a
+            private or internal address, or events is empty or contains a
+            type outside {notification.delivered, notification.failed}.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Tenant already has 3 webhook endpoints (`WEBHOOK_LIMIT_REACHED`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /webhooks/{webhookID}:
+    parameters:
+      - name: webhookID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      summary: Update webhook endpoint
+      description: Updates url, events, and/or is_active. Fields omitted from the request body are left unchanged. Never returns the secret.
+      operationId: updateWebhookEndpoint
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWebhookEndpointInput"
+      responses:
+        "200":
+          description: Updated webhook endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpoint"
+        "400":
+          description: Validation failure (invalid url or events).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Webhook endpoint not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete webhook endpoint
+      operationId: deleteWebhookEndpoint
+      tags:
+        - Webhooks
+      responses:
+        "204":
+          description: Webhook endpoint deleted.
+        "400":
+          description: Invalid webhook ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Webhook endpoint not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /notifications/send:
     post:
       summary: Send notification
@@ -1215,6 +1358,165 @@ components:
             Authorization (when secret is set), and any header matching
             X-Notifyd-* (reserved for this provider's own signature
             headers) are rejected by ValidateConfig.
+
+    # -------------------------------------------------------------------------
+    # Status Webhooks
+    #
+    # Distinct from the "webhook" channel type above: WebhookChannelConfig
+    # delivers notification *content* as a destination a tenant sends
+    # through; a WebhookEndpoint instead receives *status events about*
+    # notifications sent through any channel. They share the same HMAC
+    # signing scheme and header names (X-Notifyd-Signature,
+    # X-Notifyd-Timestamp), so one verification snippet covers both.
+    # -------------------------------------------------------------------------
+    WebhookEventType:
+      type: string
+      enum:
+        - notification.delivered
+        - notification.failed
+      description: The only two event types a webhook endpoint may subscribe to.
+
+    WebhookEndpoint:
+      type: object
+      description: >-
+        A tenant-configured destination for delivery-status events. The
+        signing secret is never included here — see
+        WebhookEndpointCreated for the one response that does.
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          example: https://example.com/hooks/notifyd-status
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookEndpointCreated:
+      description: >-
+        The POST /webhooks response: every WebhookEndpoint field plus the
+        plaintext signing secret, present in this one response only.
+      allOf:
+        - $ref: "#/components/schemas/WebhookEndpoint"
+        - type: object
+          required:
+            - secret
+          properties:
+            secret:
+              type: string
+              description: >-
+                Plaintext HMAC signing secret, shown once. notifyd does not
+                store it in reversible form and cannot show it again — if
+                lost, delete the endpoint and create a new one.
+              example: "REDACTED_SIGNING_SECRET"
+
+    CreateWebhookEndpointInput:
+      type: object
+      required:
+        - url
+        - events
+      properties:
+        url:
+          type: string
+          format: uri
+          description: >-
+            Destination endpoint. Must use https and must not resolve to a
+            private, loopback, or link-local address (checked both at
+            creation time and again at delivery time).
+          example: https://example.com/hooks/notifyd-status
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+
+    UpdateWebhookEndpointInput:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        is_active:
+          type: boolean
+
+    WebhookEventPayload:
+      type: object
+      description: The exact JSON body POSTed to a webhook endpoint on a terminal notification transition.
+      required:
+        - id
+        - type
+        - created_at
+        - data
+      properties:
+        id:
+          type: string
+          description: >-
+            Derived deterministically from (notification_id, event_type), not
+            randomly generated per delivery attempt. Delivery is
+            at-least-once: a worker crash or redelivery re-emitting the same
+            logical transition always reproduces this exact id, so it is a
+            reliable idempotency key for deduplication (see
+            X-Notifyd-Event-Id).
+          example: evt_01H9X8K2QYTVRM3F7WZC4B5D6E
+        type:
+          $ref: "#/components/schemas/WebhookEventType"
+        created_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required:
+            - notification_id
+            - channel_config_id
+            - channel
+            - status
+            - attempts
+          properties:
+            notification_id:
+              type: string
+              format: uuid
+            channel_config_id:
+              type: string
+              format: uuid
+            channel:
+              $ref: "#/components/schemas/ChannelType"
+            status:
+              type: string
+              enum:
+                - delivered
+                - failed
+            attempts:
+              type: integer
+              description: Total number of delivery attempts made for this notification, including the terminal one.
+            metadata:
+              type: object
+              description: The same caller-supplied metadata object the notification was sent with.
+      example:
+        id: evt_01H9X8K2QYTVRM3F7WZC4B5D6E
+        type: notification.delivered
+        created_at: "2026-07-14T12:00:00Z"
+        data:
+          notification_id: 5b1b6f0e-6e1a-4f3a-9c1a-2e2e2e2e2e2e
+          channel_config_id: 7c2c7f1f-7f2b-4a4b-8d2b-3f3f3f3f3f3f
+          channel: telegram
+          status: delivered
+          attempts: 2
+          metadata: {}
 
     # -------------------------------------------------------------------------
     # Notifications

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"github.com/bse/notifyd/internal/domain"
@@ -38,7 +40,7 @@ func TestNotifyErrorHandler_WhenRetriesExhausted_MarksNotificationFailed(t *test
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	notifID := uuid.New()
 	taskErr := errors.New("delivery timed out")
@@ -68,7 +70,7 @@ func TestNotifyErrorHandler_WhenRetriesExhausted_UpdateStatusFails_DoesNotPanic(
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	notifID := uuid.New()
 
@@ -89,7 +91,7 @@ func TestNotifyErrorHandler_InvalidPayload_DoesNotPanic(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, &fakeWebhookEmitter{}, zerolog.Nop())
 
 	// A task whose payload is malformed JSON: json.Unmarshal will fail, so
 	// UpdateStatus must NOT be called. The handler must absorb the error silently.
@@ -134,26 +136,153 @@ func TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotUpdateStatus(t *testi
 	t.Skip("asynq retry context values cannot be injected without unexported keys; branch covered by integration tests")
 }
 
-func TestNotifyErrorHandler_LogsTaskTypeAndRetryInfo(t *testing.T) {
-	// Verify that the handler still functions correctly when given a task with a
-	// non-deliver type (it should log but not panic).
+func TestNotifyErrorHandler_UnknownTaskType_LogsButDoesNotTouchNotificationState(t *testing.T) {
+	// A task type the handler doesn't recognize (e.g. retention:purge or
+	// usage:reconcile failing, or some future task type) must not be
+	// assumed to carry a NotificationDeliverPayload — the switch in
+	// HandleError only special-cases the two task types whose payload
+	// shape it actually knows, exactly the fix that also prevents
+	// misinterpreting a WebhookEventTaskPayload as a NotificationDeliverPayload
+	// (see TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState).
 	ctrl := gomock.NewController(t)
 	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
 
-	handler := NewNotifyErrorHandler(notifRepo, zerolog.Nop())
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
 
 	notifID := uuid.New()
 
-	// context.Background() → retried==0, maxRetry==0 → 0>=0 → UpdateStatus called.
-	notifRepo.EXPECT().
-		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
-		Return(nil)
-
-	// Use a different task type name; the handler does not filter by type.
+	// No notifRepo.EXPECT() calls registered: UpdateStatus must not be called.
 	payload, _ := json.Marshal(NotificationDeliverPayload{NotificationID: notifID})
 	task := asynq.NewTask("some:other:task:type", payload)
 
 	assert.NotPanics(t, func() {
 		handler.HandleError(context.Background(), task, errors.New("some error"))
 	})
+	assert.Empty(t, emitter.calls)
+}
+
+// TestNotifyErrorHandler_WhenRetriesExhausted_EmitsFailedEvent verifies the
+// genuine retry-exhaustion path (the error does NOT wrap asynq.SkipRetry):
+// the dispatcher's transient-failure branches never call the emitter
+// themselves (see dispatcher_test.go's *_DoesNotEmit tests), so this is the
+// only place a notification.failed event fires when retries run out through
+// ordinary backoff rather than an immediate permanent classification.
+func TestNotifyErrorHandler_WhenRetriesExhausted_EmitsFailedEvent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	notifID := uuid.New()
+	tenantID := uuid.New()
+	channelConfigID := uuid.New()
+	taskErr := errors.New("delivery timed out")
+
+	notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeErrorHandlerTask(NotificationDeliverPayload{
+		NotificationID:  notifID,
+		TenantID:        tenantID,
+		ChannelType:     "telegram",
+		ChannelConfigID: channelConfigID,
+	})
+
+	handler.HandleError(context.Background(), task, taskErr)
+
+	require.Len(t, emitter.calls, 1)
+	emitted := emitter.calls[0]
+	assert.Equal(t, tenantID, emitted.TenantID)
+	assert.Equal(t, notifID, emitted.NotificationID)
+	assert.Equal(t, channelConfigID, emitted.ChannelConfigID)
+	assert.Equal(t, "telegram", emitted.Channel)
+	assert.Equal(t, domain.WebhookEventFailed, emitted.EventType)
+}
+
+// TestNotifyErrorHandler_SkipRetryError_DoesNotEmit verifies the double-fire
+// guard: when the failing error wraps asynq.SkipRetry, the dispatcher's own
+// permanent-failure path (dispatcher.go's handlePermanentProviderFailure)
+// already emitted notification.failed before returning that error — asynq's
+// processor invokes errHandler.HandleError for every failed task
+// unconditionally, including ones wrapping SkipRetry, so this handler must
+// recognize that case and skip emitting again.
+func TestNotifyErrorHandler_SkipRetryError_DoesNotEmit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	notifID := uuid.New()
+	skipRetryErr := fmt.Errorf("provider error: rejected: %w", asynq.SkipRetry)
+
+	notifRepo.EXPECT().
+		UpdateStatus(gomock.Any(), notifID, domain.StatusFailed, gomock.Any()).
+		Return(nil)
+
+	task := makeErrorHandlerTask(NotificationDeliverPayload{NotificationID: notifID})
+
+	handler.HandleError(context.Background(), task, skipRetryErr)
+
+	assert.Empty(t, emitter.calls, "the dispatcher's permanent-failure path already emitted for this transition")
+}
+
+// TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotEmit documents that
+// the "retried < maxRetry" branch (not independently testable here — see
+// TestNotifyErrorHandler_WhenRetriesNotExhausted_DoesNotUpdateStatus's
+// comment on why asynq's context keys can't be injected) never reaches the
+// emission call at all, since it lives inside the same `if retried >=
+// maxRetry` block as the existing UpdateStatus call. No separate test is
+// needed beyond that existing branch coverage.
+func TestNotifyErrorHandler_EmitterNotCalled_WhenPayloadInvalid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	badPayload := []byte("not-valid-json{{{")
+	task := asynq.NewTask(TypeNotificationDeliver, badPayload)
+
+	handler.HandleError(context.Background(), task, errors.New("some error"))
+
+	assert.Empty(t, emitter.calls)
+}
+
+// TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState
+// verifies the handler recognizes a "webhook:event" task's own retry
+// exhaustion (dropping the event per the design doc's "then dropped,
+// recorded in logs") instead of misinterpreting WebhookEventTaskPayload's
+// JSON as a NotificationDeliverPayload. json.Unmarshal does not error on
+// unknown/missing fields, so without a task-type check this would silently
+// decode into a zero-value NotificationDeliverPayload — a real notification
+// ID of all-zeros — and both overwrite that notification's status and
+// enqueue a spurious webhook event for it.
+func TestNotifyErrorHandler_WebhookEventTaskExhausted_LogsAndDoesNotTouchNotificationState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	notifRepo := mocks.NewMockNotificationRepository(ctrl)
+	emitter := &fakeWebhookEmitter{}
+
+	handler := NewNotifyErrorHandler(notifRepo, emitter, zerolog.Nop())
+
+	webhookPayload := WebhookEventTaskPayload{
+		EndpointID: uuid.New(),
+		Event: WebhookEventPayload{
+			ID:   "evt_dropped",
+			Type: "notification.delivered",
+			Data: WebhookEventData{NotificationID: uuid.New()},
+		},
+	}
+	payloadBytes, err := json.Marshal(webhookPayload)
+	require.NoError(t, err)
+	task := asynq.NewTask(TypeWebhookEvent, payloadBytes)
+
+	// No notifRepo.EXPECT() calls registered: UpdateStatus must not be
+	// called at all for a webhook:event task's own exhaustion.
+	handler.HandleError(context.Background(), task, errors.New("endpoint unreachable"))
+
+	assert.Empty(t, emitter.calls, "a webhook:event task's own exhaustion must not enqueue another webhook event")
 }

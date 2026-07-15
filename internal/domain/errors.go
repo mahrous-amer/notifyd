@@ -9,4 +9,5 @@ var (
 	ErrMetricsNotSupported = errors.New("metrics not supported")
 	ErrChannelNotInPlan    = errors.New("channel not in plan")
 	ErrKeyLimitReached     = errors.New("api key limit reached")
+	ErrWebhookLimitReached = errors.New("webhook endpoint limit reached")
 )

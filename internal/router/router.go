@@ -32,6 +32,7 @@ func New(
 	svcHMACSecret string,
 	quotaMW func(http.Handler) http.Handler,
 	apiKeyH *handler.APIKeyHandler,
+	webhookH *handler.WebhookEndpointHandler,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -69,6 +70,15 @@ func New(
 				r.Get("/", channelH.GetByID)
 				r.Patch("/", channelH.Update)
 				r.Delete("/", channelH.Delete)
+			})
+		})
+
+		r.Route("/webhooks", func(r chi.Router) {
+			r.Get("/", webhookH.List)
+			r.Post("/", webhookH.Create)
+			r.Route("/{webhookID}", func(r chi.Router) {
+				r.Put("/", webhookH.Update)
+				r.Delete("/", webhookH.Delete)
 			})
 		})
 

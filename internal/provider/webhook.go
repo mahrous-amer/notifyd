@@ -3,14 +3,10 @@ package provider
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -19,11 +15,6 @@ import (
 
 	"github.com/bse/notifyd/internal/domain"
 )
-
-// webhookDialTimeout bounds DNS resolution and TCP connect for a single
-// dial attempt. Kept short because a webhook target that can't be reached
-// quickly is not worth blocking a worker slot for.
-const webhookDialTimeout = 10 * time.Second
 
 // webhookRequestTimeout bounds the entire request including the receiver's
 // processing time, independent of any deadline the caller's context sets.
@@ -46,13 +37,13 @@ var webhookHeaderBlockPattern = regexp.MustCompile(`(?i)^x-notifyd`)
 // Slack, or email, the destination is an arbitrary URL under tenant control,
 // which makes it a natural SSRF vector against the network notifyd itself
 // runs on. Every dial goes through guardedDialContext (see ssrf_guard.go),
-// and redirects are never followed (see newWebhookHTTPClient).
+// and redirects are never followed (see NewGuardedHTTPClient).
 type WebhookProvider struct {
 	client *http.Client
 }
 
 func NewWebhookProvider() *WebhookProvider {
-	return &WebhookProvider{client: newWebhookHTTPClient()}
+	return &WebhookProvider{client: NewGuardedHTTPClient(webhookRequestTimeout)}
 }
 
 // NewWebhookProviderWithClient builds a WebhookProvider around a caller-
@@ -66,30 +57,6 @@ func NewWebhookProvider() *WebhookProvider {
 // NewWebhookProvider.
 func NewWebhookProviderWithClient(client *http.Client) *WebhookProvider {
 	return &WebhookProvider{client: client}
-}
-
-// newWebhookHTTPClient builds the http.Client used for all webhook sends.
-// Two properties make this safe to point at tenant-supplied URLs:
-//
-//  1. DialContext is replaced with guardedDialContext, which validates the
-//     resolved address (not just the hostname) before every connection —
-//     including connections opened while following a redirect, since a
-//     redirect reuses the same Transport/DialContext.
-//  2. CheckRedirect refuses to follow any redirect at all. A legitimate
-//     webhook receiver has no reason to redirect a POST; disabling redirects
-//     outright is simpler and strictly safer than re-validating each hop.
-func newWebhookHTTPClient() *http.Client {
-	dialer := &net.Dialer{Timeout: webhookDialTimeout}
-	transport := &http.Transport{
-		DialContext: guardedDialContext(dialer),
-	}
-	return &http.Client{
-		Transport: transport,
-		Timeout:   webhookRequestTimeout,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 }
 
 func (w *WebhookProvider) Type() string { return "webhook" }
@@ -177,20 +144,6 @@ func buildWebhookPayload(req SendRequest) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-// signWebhookPayload computes the HMAC-SHA256 signature notifyd sends
-// alongside a signed webhook request. The signature covers
-// "timestamp.body" rather than just body so a captured (timestamp,
-// signature, body) triple cannot be replayed under a different timestamp —
-// the receiver is expected to reject requests whose timestamp is too old,
-// which only works if the timestamp itself is part of what's signed.
-func signWebhookPayload(secret, timestamp string, body []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(timestamp))
-	mac.Write([]byte("."))
-	mac.Write(body)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
 func (w *WebhookProvider) Send(ctx context.Context, rawConfig json.RawMessage, req SendRequest) (*SendResponse, error) {
 	var cfg webhookConfig
 	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
@@ -212,7 +165,7 @@ func (w *WebhookProvider) Send(ctx context.Context, rawConfig json.RawMessage, r
 	}
 	if cfg.Secret != "" {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-		signature := signWebhookPayload(cfg.Secret, timestamp, body)
+		signature := SignHMAC(cfg.Secret, timestamp, body)
 		httpReq.Header.Set("X-Notifyd-Timestamp", timestamp)
 		httpReq.Header.Set("X-Notifyd-Signature", "sha256="+signature)
 	}

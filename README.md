@@ -14,6 +14,7 @@ notifyd is a multi-tenant notification delivery service written in Go. It receiv
   - [Authentication](#authentication)
   - [Channels](#channels)
   - [Notifications](#notifications)
+  - [Status Webhooks](#status-webhooks)
   - [Admin: Tenants](#admin-tenants)
 - [End-to-End Walkthrough](#end-to-end-walkthrough)
 - [Channel Configuration](#channel-configuration)
@@ -556,6 +557,138 @@ curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID/attempts \
 ```bash
 curl -s https://notifyd.fluxintek.com/notifications/NOTIFICATION_ID/metrics \
   -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+### Status Webhooks
+
+Push `notification.delivered` / `notification.failed` outcomes to your own endpoint instead of polling `GET /notifications/{id}`. This is a separate thing from the [`webhook` channel](#webhook): that delivers notification *content* as a destination you send through; this delivers *status events about* notifications sent through any channel. Both share the same HMAC signing scheme and header names, so one verification snippet covers both.
+
+#### GET /webhooks
+
+List all webhook endpoints for the authenticated tenant. The signing secret is never returned here.
+
+```bash
+curl -s https://notifyd.fluxintek.com/webhooks \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+#### POST /webhooks
+
+Create a webhook endpoint. notifyd generates the signing secret and returns it **once**, in this response only — store it immediately, it cannot be retrieved again. Capped at 3 endpoints per tenant.
+
+```bash
+curl -s -X POST https://notifyd.fluxintek.com/webhooks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "url": "https://example.com/hooks/notifyd-status",
+    "events": ["notification.delivered", "notification.failed"]
+  }'
+```
+
+```json
+{
+  "id": "…",
+  "tenant_id": "…",
+  "url": "https://example.com/hooks/notifyd-status",
+  "events": ["notification.delivered", "notification.failed"],
+  "is_active": true,
+  "created_at": "2026-07-14T12:00:00Z",
+  "secret": "REDACTED_SIGNING_SECRET"
+}
+```
+
+`url` must use `https` and must not resolve to a private, loopback, or link-local address — checked both at creation time and again at delivery time (see [SSRF protection](#webhook) above; the same guard covers both delivery paths). `events` must be a non-empty subset of `notification.delivered` and `notification.failed`.
+
+#### PUT /webhooks/{id}
+
+Update `url`, `events`, and/or `is_active`. Fields omitted from the body are left unchanged. Never returns the secret.
+
+```bash
+curl -s -X PUT https://notifyd.fluxintek.com/webhooks/WEBHOOK_ID \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"is_active": false}'
+```
+
+#### DELETE /webhooks/{id}
+
+```bash
+curl -s -X DELETE https://notifyd.fluxintek.com/webhooks/WEBHOOK_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+#### Event payload
+
+Every subscribed terminal transition POSTs this body to the endpoint's `url`:
+
+```json
+{
+  "id": "evt_01H9X8K2QYTVRM3F7WZC4B5D6E",
+  "type": "notification.delivered",
+  "created_at": "2026-07-14T12:00:00Z",
+  "data": {
+    "notification_id": "…",
+    "channel_config_id": "…",
+    "channel": "telegram",
+    "status": "delivered",
+    "attempts": 2,
+    "metadata": {}
+  }
+}
+```
+
+`attempts` is the notification's true attempt count, including the terminal one. Only the two terminal statuses ever fire an event — `pending`/`processing`/`retrying` are intentionally not observable this way.
+
+`id` is derived deterministically from `(notification_id, event_type)`, not randomly generated per delivery attempt: re-emitting the same logical transition (e.g. after a notifyd worker crash and task redelivery) always produces the identical `id`. **Delivery is at-least-once, not exactly-once** — your endpoint should be prepared to receive the same event more than once, and should deduplicate on `id` (equivalently, the `X-Notifyd-Event-Id` header) rather than assuming a single delivery.
+
+Headers on every delivery:
+
+| Header | Description |
+|---|---|
+| `X-Notifyd-Timestamp` | Unix timestamp used in the signature below |
+| `X-Notifyd-Signature` | `sha256=<hex hmac>`, computed as HMAC-SHA256 over `"<timestamp>.<raw body>"` using your endpoint's `secret` as the key |
+| `X-Notifyd-Event-Id` | The event's `id` field. Stable across every retry *and* redelivery of the same logical transition — the reliable key to deduplicate on |
+
+**Retry behavior:** a 2xx response is success. Anything else is retried with exponential backoff, up to 8 attempts spread over roughly 6 hours, then the event is dropped and the failure is recorded in notifyd's logs — there is no redelivery UI. No redirect is ever followed.
+
+**Verification snippet (Go):**
+
+```go
+func verifyNotifydSignature(secret, timestampHeader, signatureHeader string, body []byte) error {
+    ts, err := strconv.ParseInt(timestampHeader, 10, 64)
+    if err != nil {
+        return fmt.Errorf("invalid timestamp: %w", err)
+    }
+    if time.Since(time.Unix(ts, 0)) > 5*time.Minute {
+        return fmt.Errorf("timestamp too old, possible replay")
+    }
+
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write([]byte(timestampHeader))
+    mac.Write([]byte("."))
+    mac.Write(body)
+    expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+    if !hmac.Equal([]byte(expected), []byte(signatureHeader)) {
+        return fmt.Errorf("signature mismatch")
+    }
+    return nil
+}
+```
+
+Call it with `r.Header.Get("X-Notifyd-Timestamp")`, `r.Header.Get("X-Notifyd-Signature")`, and the raw request body read *before* any JSON decoding (decoding and re-marshaling can change byte-for-byte formatting and break the signature check).
+
+**Pseudocode (any language):**
+
+```
+timestamp = header("X-Notifyd-Timestamp")
+signature = header("X-Notifyd-Signature")   # "sha256=<hex>"
+expected  = "sha256=" + hex(hmac_sha256(secret, timestamp + "." + raw_body))
+if not constant_time_equal(expected, signature): reject()
+if now() - timestamp > 5 minutes: reject()  # replay protection
 ```
 
 ---
