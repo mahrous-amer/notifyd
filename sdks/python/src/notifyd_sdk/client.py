@@ -94,7 +94,14 @@ class NotifydClient:
     # -- Token exchange ----------------------------------------------------
 
     def _authenticated_token(self) -> str:
-        """Returns a cached JWT if it isn't near expiry, else exchanges for a fresh one."""
+        """Returns a cached JWT if it isn't near expiry, else exchanges for a fresh one.
+
+        _token_lock is deliberately held across the /auth/token HTTP round
+        trip inside _fetch_and_cache_token_locked, not just around the
+        cache read: concurrent threads that all observe a stale cache must
+        queue behind the first exchange and then reuse its result, rather
+        than each firing their own redundant request.
+        """
         expiry_margin_seconds = 30
         with self._token_lock:
             if self._cached_token and time.monotonic() + expiry_margin_seconds < self._token_expires_at:

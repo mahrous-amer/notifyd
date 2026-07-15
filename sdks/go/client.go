@@ -117,6 +117,12 @@ type tokenResponse struct {
 // exchanges credentials for a fresh one. The 30-second safety margin
 // absorbs request latency between this check and the token actually being
 // used, without relying solely on the refresh-on-401 fallback.
+//
+// tokenMu is deliberately held across the /auth/token HTTP round trip
+// inside fetchAndCacheToken (not just around the cache read): concurrent
+// callers that all observe a stale cache must queue behind the first
+// exchange and then reuse its result, rather than each firing their own
+// redundant request. See TestConcurrentCallersShareOneTokenExchange.
 func (c *Client) authenticatedToken(ctx context.Context) (string, error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()

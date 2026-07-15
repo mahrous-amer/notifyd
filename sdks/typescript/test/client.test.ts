@@ -23,6 +23,25 @@ describe("token exchange and caching", () => {
     expect(() => new NotifydClient({ apiKey: "", apiSecret: "" })).toThrow(NotifydConfigError);
     expect(() => new NotifydClient({ apiKey: "k", apiSecret: "" })).toThrow(NotifydConfigError);
   });
+
+  it("shares one in-flight token exchange across concurrent send() calls", async () => {
+    const { client, issuedTokens } = newMockServer((request) => {
+      expect(request.path).toBe("/notifications/send");
+      return { status: 202, body: { id: "notif-1", status: "pending" } };
+    });
+
+    // All 20 calls start before any of them awaits the token fetch, so
+    // without the shared pendingTokenFetch promise this would trigger 20
+    // separate /auth/token exchanges instead of 1.
+    const concurrentCallers = 20;
+    const sends = Array.from({ length: concurrentCallers }, (_, i) =>
+      client.send({ channelConfigId: `chan-${i}`, body: "hello" }),
+    );
+    const results = await Promise.all(sends);
+
+    expect(results).toHaveLength(concurrentCallers);
+    expect(issuedTokens).toEqual(["test-token-1"]);
+  });
 });
 
 describe("refresh-once-on-401", () => {

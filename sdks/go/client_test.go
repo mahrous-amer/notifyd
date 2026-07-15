@@ -6,22 +6,26 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // newTestServer builds an httptest server that issues token
 // "test-token-<n>" on each /auth/token call (n increments per call, so
 // tests can distinguish a cached token from a freshly-issued one) and
 // dispatches every other path through handler. handler receives the
-// Authorization header's bearer token so tests can assert on it.
-func newTestServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request, bearerToken string)) (*httptest.Server, *Client) {
+// Authorization header's bearer token so tests can assert on it. The
+// returned tokenCallCount function is safe to call concurrently with
+// in-flight requests.
+func newTestServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request, bearerToken string)) (server *httptest.Server, client *Client, tokenCallCount func() int64) {
 	t.Helper()
 
-	var tokenCallCount int64
+	var callCount int64
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/token", func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt64(&tokenCallCount, 1)
+		n := atomic.AddInt64(&callCount, 1)
 		var req map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("token request body: %v", err)
@@ -46,24 +50,24 @@ func newTestServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Req
 		handler(w, r, token)
 	})
 
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	testServer := httptest.NewServer(mux)
+	t.Cleanup(testServer.Close)
 
-	client, err := New(Config{
+	newClient, err := New(Config{
 		APIKey:    "test-key",
 		APISecret: "test-secret",
-		BaseURL:   server.URL,
+		BaseURL:   testServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return server, client
+	return testServer, newClient, func() int64 { return atomic.LoadInt64(&callCount) }
 }
 
 func TestTokenExchangeAndCaching(t *testing.T) {
 	ctx := context.Background()
 	var channelsCalls int
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/channels" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -88,7 +92,7 @@ func TestTokenExchangeAndCaching(t *testing.T) {
 func TestRefreshOnceOn401(t *testing.T) {
 	ctx := context.Background()
 	var requestTokens []string
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		requestTokens = append(requestTokens, token)
 		// Reject the first token to simulate an expired/revoked token the
 		// client didn't know about yet; accept any subsequent token.
@@ -114,7 +118,7 @@ func TestRefreshOnceOn401(t *testing.T) {
 func TestRefreshOnlyOnceNotLooped(t *testing.T) {
 	ctx := context.Background()
 	var attempts int
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		attempts++
 		// Every attempt returns 401, simulating persistently bad
 		// credentials. The client must give up after one retry, not loop.
@@ -140,7 +144,7 @@ func TestRefreshOnlyOnceNotLooped(t *testing.T) {
 
 func TestSend(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/notifications/send" || r.Method != http.MethodPost {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -166,7 +170,7 @@ func TestSend(t *testing.T) {
 
 func TestSend_QuotaExceededExposesUpgradeURL(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		json.NewEncoder(w).Encode(map[string]any{
 			"error":       "QUOTA_EXCEEDED",
@@ -198,7 +202,7 @@ func TestSend_QuotaExceededExposesUpgradeURL(t *testing.T) {
 
 func TestSendMulti(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/notifications/send-multi" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -223,7 +227,7 @@ func TestSendMulti(t *testing.T) {
 
 func TestListNotifications(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/notifications" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -247,7 +251,7 @@ func TestListNotifications(t *testing.T) {
 
 func TestGetNotification(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/notifications/notif-1" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -265,7 +269,7 @@ func TestGetNotification(t *testing.T) {
 
 func TestListAttempts(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		if r.URL.Path != "/notifications/notif-1/attempts" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -283,7 +287,7 @@ func TestListAttempts(t *testing.T) {
 
 func TestChannelsCRUD(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/channels":
 			w.WriteHeader(http.StatusCreated)
@@ -326,7 +330,7 @@ func TestChannelsCRUD(t *testing.T) {
 
 func TestKeysCRUD(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/keys":
 			json.NewEncoder(w).Encode([]APIKey{{ID: "key-1", Label: "ci"}})
@@ -360,7 +364,7 @@ func TestKeysCRUD(t *testing.T) {
 
 func TestWebhooksCRUD(t *testing.T) {
 	ctx := context.Background()
-	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+	_, client, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/webhooks":
 			json.NewEncoder(w).Encode([]WebhookEndpoint{{ID: "wh-1"}})
@@ -410,5 +414,45 @@ func TestNewRequiresCredentials(t *testing.T) {
 	}
 	if _, err := New(Config{APIKey: "k"}); err == nil {
 		t.Fatal("expected error for missing api secret")
+	}
+}
+
+// TestConcurrentCallersShareOneTokenExchange proves the tokenMu
+// hold-lock-across-I/O design in authenticatedToken (see the comment
+// there): many callers racing to make their first authenticated request
+// must still result in exactly one /auth/token exchange, not one per
+// goroutine. Run with -race to also confirm no data race on the shared
+// token cache itself.
+func TestConcurrentCallersShareOneTokenExchange(t *testing.T) {
+	ctx := context.Background()
+	const concurrentCallers = 50
+
+	// A small delay widens the race window: without correct
+	// serialization, every goroutine would observe an empty cache and
+	// start its own token exchange before the first one completes.
+	_, client, tokenCallCount := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+		time.Sleep(5 * time.Millisecond)
+		json.NewEncoder(w).Encode([]ChannelConfig{})
+	})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrentCallers)
+	for i := 0; i < concurrentCallers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := client.ListChannels(ctx); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("ListChannels: %v", err)
+	}
+	if got := tokenCallCount(); got != 1 {
+		t.Fatalf("got %d /auth/token exchanges for %d concurrent callers, want exactly 1", got, concurrentCallers)
 	}
 }
