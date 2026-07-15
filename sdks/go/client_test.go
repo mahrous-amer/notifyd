@@ -164,6 +164,38 @@ func TestSend(t *testing.T) {
 	}
 }
 
+func TestSend_QuotaExceededExposesUpgradeURL(t *testing.T) {
+	ctx := context.Background()
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":       "QUOTA_EXCEEDED",
+			"upgrade_url": "https://notifyd.fluxintek.com/account/upgrade",
+		})
+	})
+
+	_, err := client.Send(ctx, SendInput{ChannelConfigID: "chan-1", Body: "hello"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	reqErr, ok := err.(*RequestError)
+	if !ok {
+		t.Fatalf("got error type %T, want *RequestError", err)
+	}
+	if reqErr.StatusCode != http.StatusTooManyRequests || reqErr.Code != "QUOTA_EXCEEDED" {
+		t.Fatalf("got %+v, want 429 QUOTA_EXCEEDED", reqErr)
+	}
+
+	upgradeURL, ok := reqErr.Field("upgrade_url")
+	if !ok {
+		t.Fatalf("expected upgrade_url field to be present in %+v", reqErr.Body)
+	}
+	if upgradeURL != "https://notifyd.fluxintek.com/account/upgrade" {
+		t.Fatalf("got upgrade_url %q, want the account upgrade link", upgradeURL)
+	}
+}
+
 func TestSendMulti(t *testing.T) {
 	ctx := context.Background()
 	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request, token string) {

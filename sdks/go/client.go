@@ -73,11 +73,15 @@ func New(cfg Config) (*Client, error) {
 // RequestError is returned for any non-2xx API response. StatusCode and
 // Code (the machine-readable "error" field, when present) let callers
 // branch on specific failure modes like QUOTA_EXCEEDED without parsing
-// strings.
+// strings. Body holds the fully parsed JSON response, so error shapes that
+// carry extra context beyond "error" -- QuotaExceededError's upgrade_url,
+// SubscriptionExpiredError's renew_url -- are still reachable without the
+// SDK needing a bespoke type for every error variant the API might add.
 type RequestError struct {
 	StatusCode int
 	Code       string
 	Message    string
+	Body       map[string]any
 }
 
 func (e *RequestError) Error() string {
@@ -85,6 +89,22 @@ func (e *RequestError) Error() string {
 		return fmt.Sprintf("notifyd: %d %s", e.StatusCode, e.Code)
 	}
 	return fmt.Sprintf("notifyd: %d %s", e.StatusCode, e.Message)
+}
+
+// Field returns a string-valued field from the parsed error body, such as
+// upgrade_url on a 429 QUOTA_EXCEEDED or renew_url on a 402
+// SUBSCRIPTION_PERIOD_EXPIRED. ok is false if the body has no such field,
+// the response body wasn't JSON, or the field isn't a string.
+func (e *RequestError) Field(key string) (value string, ok bool) {
+	if e.Body == nil {
+		return "", false
+	}
+	raw, present := e.Body[key]
+	if !present {
+		return "", false
+	}
+	value, ok = raw.(string)
+	return value, ok
 }
 
 // tokenResponse mirrors the TokenResponse schema.
@@ -252,13 +272,18 @@ func (c *Client) send(ctx context.Context, token string, opts requestOptions) (*
 }
 
 // requestErrorFromBody builds a *RequestError from a non-2xx response,
-// extracting the machine-readable error code when the body parses as
-// APIError. A body that isn't JSON (e.g. an upstream proxy's HTML error
-// page) still produces a usable error with the raw body as Message.
+// keeping the full parsed body (so extra fields like upgrade_url/renew_url
+// stay reachable via RequestError.Field) whenever it parses as a JSON
+// object with a string "error" field. A body that isn't JSON (e.g. an
+// upstream proxy's HTML error page) still produces a usable error with the
+// raw body as Message.
 func requestErrorFromBody(statusCode int, body []byte) *RequestError {
-	var apiErr APIError
-	if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error != "" {
-		return &RequestError{StatusCode: statusCode, Code: apiErr.Error}
+	var parsedBody map[string]any
+	if err := json.Unmarshal(body, &parsedBody); err == nil {
+		code, _ := parsedBody["error"].(string)
+		if code != "" {
+			return &RequestError{StatusCode: statusCode, Code: code, Body: parsedBody}
+		}
 	}
 	return &RequestError{StatusCode: statusCode, Message: string(body)}
 }

@@ -98,6 +98,27 @@ def test_send(notifyd_client: NotifydClient) -> None:
 
 
 @responses_lib.activate
+def test_send_quota_exceeded_exposes_upgrade_url(notifyd_client: NotifydClient) -> None:
+    register_token_endpoint(responses_lib.mock)
+    responses_lib.add(
+        responses_lib.POST,
+        f"{MOCK_BASE_URL}/notifications/send",
+        json={"error": "QUOTA_EXCEEDED", "upgrade_url": "https://notifyd.fluxintek.com/account/upgrade"},
+        status=429,
+    )
+
+    with pytest.raises(NotifydRequestError) as exc_info:
+        notifyd_client.send(channel_config_id="chan-1", body="hello")
+
+    error = exc_info.value
+    assert error.status_code == 429
+    assert error.code == "QUOTA_EXCEEDED"
+    assert error.body is not None
+    assert error.body["upgrade_url"] == "https://notifyd.fluxintek.com/account/upgrade"
+    assert error.field("upgrade_url") == "https://notifyd.fluxintek.com/account/upgrade"
+
+
+@responses_lib.activate
 def test_send_multi(notifyd_client: NotifydClient) -> None:
     register_token_endpoint(responses_lib.mock)
     responses_lib.add(

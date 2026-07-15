@@ -87,6 +87,31 @@ describe("notifications", () => {
     });
   });
 
+  it("exposes upgrade_url from a 429 QUOTA_EXCEEDED body", async () => {
+    const { client } = newMockServer((request) => {
+      expect(request.path).toBe("/notifications/send");
+      return {
+        status: 429,
+        body: {
+          error: "QUOTA_EXCEEDED",
+          upgrade_url: "https://notifyd.fluxintek.com/account/upgrade",
+        },
+      };
+    });
+
+    try {
+      await client.send({ channelConfigId: "chan-1", body: "hello" });
+      expect.unreachable("expected send to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NotifydRequestError);
+      const requestError = error as NotifydRequestError;
+      expect(requestError.statusCode).toBe(429);
+      expect(requestError.code).toBe("QUOTA_EXCEEDED");
+      expect(requestError.body?.upgrade_url).toBe("https://notifyd.fluxintek.com/account/upgrade");
+      expect(requestError.field("upgrade_url")).toBe("https://notifyd.fluxintek.com/account/upgrade");
+    }
+  });
+
   it("sends to multiple channels and surfaces partial errors", async () => {
     const { client } = newMockServer((request) => {
       expect(request.path).toBe("/notifications/send-multi");
