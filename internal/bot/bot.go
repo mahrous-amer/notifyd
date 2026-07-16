@@ -46,6 +46,14 @@ type BotConfig struct {
 // New creates a Bot and connects to the Telegram API. It returns an error
 // if the token is invalid or the API is unreachable.
 func New(cfg BotConfig) (*Bot, error) {
+	// Install the token-redacting logger before any API call. The library logs
+	// full request URLs (token included) on transport errors via its global
+	// logger; without this the bot token leaks into logs in cleartext. This is
+	// a package-global setter, which is fine: there is one bot per process.
+	if err := tgbotapi.SetLogger(redactingLogger{logger: cfg.Logger, token: cfg.Token}); err != nil {
+		return nil, fmt.Errorf("install telegram logger: %w", err)
+	}
+
 	api, err := tgbotapi.NewBotAPI(cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("connect to telegram api: %w", err)
