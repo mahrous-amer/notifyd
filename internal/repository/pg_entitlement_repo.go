@@ -60,7 +60,7 @@ func (r *PgEntitlementRepo) ListAll(ctx context.Context) ([]*domain.Entitlements
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*domain.Entitlements
+	out := make([]*domain.Entitlements, 0)
 	for rows.Next() {
 		e, err := scanEntitlements(rows)
 		if err != nil {

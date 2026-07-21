@@ -152,7 +152,7 @@ func (r *PgNotificationRepo) List(ctx context.Context, filter domain.Notificatio
 	}
 	defer rows.Close()
 
-	var notifications []*domain.Notification
+	notifications := make([]*domain.Notification, 0)
 	for rows.Next() {
 		n := &domain.Notification{}
 		err := rows.Scan(

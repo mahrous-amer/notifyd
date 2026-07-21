@@ -50,7 +50,7 @@ func (r *PgAPIKeyRepo) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*domain.APIKey
+	out := make([]*domain.APIKey, 0)
 	for rows.Next() {
 		var k domain.APIKey
 		if err := rows.Scan(&k.ID, &k.TenantID, &k.APIKey, &k.APISecretHash, &k.Label, &k.CreatedAt, &k.RevokedAt); err != nil {

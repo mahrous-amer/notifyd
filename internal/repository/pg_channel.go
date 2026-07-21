@@ -129,7 +129,7 @@ func (r *PgChannelConfigRepo) queryConfigs(ctx context.Context, query string, ar
 	}
 	defer rows.Close()
 
-	var configs []*domain.ChannelConfig
+	configs := make([]*domain.ChannelConfig, 0)
 	for rows.Next() {
 		cfg := &domain.ChannelConfig{}
 		var deliveryPrefsJSON []byte
