@@ -150,7 +150,7 @@ func scanWebhookEndpoint(row pgx.Row) (*domain.WebhookEndpoint, error) {
 }
 
 func collectWebhookEndpoints(rows pgx.Rows) ([]*domain.WebhookEndpoint, error) {
-	var out []*domain.WebhookEndpoint
+	out := make([]*domain.WebhookEndpoint, 0)
 	for rows.Next() {
 		e := &domain.WebhookEndpoint{}
 		if err := rows.Scan(&e.ID, &e.TenantID, &e.URL, &e.Secret, &e.Events, &e.IsActive, &e.CreatedAt); err != nil {

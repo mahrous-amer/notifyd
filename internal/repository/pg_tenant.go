@@ -96,7 +96,7 @@ func (r *PgTenantRepo) List(ctx context.Context, limit, offset int) ([]*domain.T
 	}
 	defer rows.Close()
 
-	var tenants []*domain.Tenant
+	tenants := make([]*domain.Tenant, 0)
 	for rows.Next() {
 		t, err := r.scanTenantRow(rows)
 		if err != nil {

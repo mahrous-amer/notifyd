@@ -36,7 +36,7 @@ func (r *PgDeliveryAttemptRepo) ListByNotification(ctx context.Context, notifica
 	}
 	defer rows.Close()
 
-	var attempts []*domain.DeliveryAttempt
+	attempts := make([]*domain.DeliveryAttempt, 0)
 	for rows.Next() {
 		a := &domain.DeliveryAttempt{}
 		err := rows.Scan(&a.ID, &a.NotificationID, &a.AttemptNumber, &a.Status, &a.ProviderResponse, &a.ErrorMessage, &a.DurationMs, &a.AttemptedAt)
